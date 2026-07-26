@@ -1,3 +1,7 @@
+---
+title: "Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer"
+---
+
 * **Author:** Manohar Gonohal
 * **Date:** July 26, 2026
 * **Target File:** `bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe`

