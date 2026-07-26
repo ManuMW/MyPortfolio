@@ -1,0 +1,24 @@
+---
+layout: default
+---
+
+<article class="post-single">
+  <header class="post-header">
+    <h1>{{ page.title }}</h1>
+    <div class="post-meta">
+      <span>{{ site.author | default: "Author" }}</span>
+      <span>&middot;</span>
+      <span>{{ content | strip_html | number_of_words }} words</span>
+      <span>&middot;</span>
+      <span>
+        {% assign words = content | strip_html | number_of_words %}
+        {% assign readtime = words | divided_by: 200 %}
+        {% if readtime == 0 %}1{% else %}{{ readtime }}{% endif %} min read
+      </span>
+    </div>
+  </header>
+  
+  <div class="post-content">
+    {{ content }}
+  </div>
+</article>

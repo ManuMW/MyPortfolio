@@ -1,68 +1,80 @@
 <!DOCTYPE html>
-<html lang="en-US">
-  <head>
-    <meta charset='utf-8'>
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/assets/css/style.css?v=47529b63c378406690e9f677e751d5835b234a29">
-    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer | Technical analysis, threat intelligence reports, and malware reverse engineering write-ups.</title>
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🛡️</text></svg>">
+</head>
+<body class="dark">
 
-<!-- Setup theme-color -->
-<!-- start theme color meta headers -->
-<meta name="theme-color" content="#151515">
-<meta name="msapplication-navbutton-color" content="#151515">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<!-- end theme color meta headers -->
+  <script>
+    // Theme toggle init script to prevent flashing
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light') {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    } else if (theme === 'dark') {
+      document.body.classList.add('dark');
+      document.body.classList.remove('light');
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    }
+  </script>
 
-
-<!-- Setup Google Analytics -->
-
-
-
-<!-- You can set your favicon here -->
-<!-- link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" -->
-
-<!-- end custom head snippets -->
-
-
-<!-- Begin Jekyll SEO tag v2.8.0 -->
-<title>Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer | RE Reports</title>
-<meta name="generator" content="Jekyll v3.10.0" />
-<meta property="og:title" content="Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer" />
-<meta property="og:locale" content="en_US" />
-<meta name="description" content="Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer" />
-<meta property="og:description" content="Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer" />
-<link rel="canonical" href="http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/" />
-<meta property="og:url" content="http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/" />
-<meta property="og:site_name" content="RE Reports" />
-<meta property="og:type" content="website" />
-<meta name="twitter:card" content="summary" />
-<meta property="twitter:title" content="Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer" />
-<script type="application/ld+json">
-{"@context":"https://schema.org","@type":"WebPage","description":"Author: Manohar Gonohal Date: July 26, 2026 Target File: bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe Threat Classification: Clipper &amp; Cryptocurrency Wallet Stealer","headline":"Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer","url":"http://localhost:4000/Deconstructing-a-PyArmor-Obfuscated-Clipper-and-Wallet-Stealer/"}</script>
-<!-- End Jekyll SEO tag -->
-
-  </head>
-
-  <body>
-
-    <header>
-      <div class="container">
-        <a id="a-title" href="/">
-          <h1>RE Reports</h1>
-        </a>
-        <h2>Technical analysis, threat intelligence reports, and malware reverse engineering write-ups.</h2>
-
-        <section id="downloads">
-          
-          <a href="https://github.com/ManuMW/RE-Reports" class="btn btn-github"><span class="icon"></span>View on GitHub</a>
-        </section>
-      </div>
+  <div class="site-wrapper">
+    <header class="rpg-header">
+      <nav class="nav">
+        <div class="logo">
+          <a href="/">RE Reports</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li>
+            <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle Theme">
+              <!-- Sun / Moon SVG icon -->
+              <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <svg id="sun" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </nav>
     </header>
 
-    <div class="container">
-      <section id="main_content">
-        <ul>
+    <main>
+      <article class="post-single">
+  <header class="post-header">
+    <h1>Deconstructing a PyArmor-Obfuscated Clipper and Wallet Stealer</h1>
+    <div class="post-meta">
+      <span>Manohar Gonohal</span>
+      <span>&middot;</span>
+      <span>1392 words</span>
+      <span>&middot;</span>
+      <span>
+        
+        
+        6 min read
+      </span>
+    </div>
+  </header>
+  
+  <div class="post-content">
+    <ul>
   <li><strong>Author:</strong> Manohar Gonohal</li>
   <li><strong>Date:</strong> July 26, 2026</li>
   <li><strong>Target File:</strong> <code class="language-plaintext highlighter-rouge">bed759e549a932e839a6fc57ae831105cc17bdd8ec86b5ba54d018f92f5d9795.exe</code></li>
@@ -314,7 +326,47 @@
   <li><strong>Persistence Mechanism:</strong> Windows Scheduled Task running every minute targeting <code class="language-plaintext highlighter-rouge">002_n.js</code> / <code class="language-plaintext highlighter-rouge">uusd.exe</code>.</li>
 </ul>
 
-      </section>
-    </div>
-  </body>
+  </div>
+</article>
+
+    </main>
+
+    <footer class="rpg-footer">
+      <p>&copy; 2026 RE Reports. Built with Jekyll (PaperMod layout).</p>
+    </footer>
+  </div>
+
+  <script>
+    // Theme toggle button logic
+    const themeBtn = document.getElementById('theme-toggle');
+    const sunIcon = document.getElementById('sun');
+    const moonIcon = document.getElementById('moon');
+
+    function updateIcons() {
+      if (document.body.classList.contains('dark')) {
+        sunIcon.style.display = 'block';
+        moonIcon.style.display = 'none';
+      } else {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'block';
+      }
+    }
+
+    // Set initial icon states
+    updateIcons();
+
+    themeBtn.addEventListener('click', () => {
+      if (document.body.classList.contains('dark')) {
+        document.body.classList.remove('dark');
+        document.body.classList.add('light');
+        localStorage.setItem('theme', 'light');
+      } else {
+        document.body.classList.remove('light');
+        document.body.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      }
+      updateIcons();
+    });
+  </script>
+</body>
 </html>
