@@ -1,32 +1,68 @@
 ---
 layout: default
-title: RE Reports
+title: Portfolio
 ---
 
 <section class="profile">
   <h1>{{ site.title }}</h1>
   <p class="profile-subtitle">{{ site.description }}</p>
   <div class="social-links">
-    <a href="https://github.com/{{ site.github_username }}/RE-Reports" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/{{ site.github_username }}/MyPortfolio" target="_blank" rel="noopener">GitHub</a>
   </div>
 </section>
 
-<section class="reports-list">
-  {% for report in site.reports %}
-    <article class="report-card">
-      <h2>
-        <a href="{{ report.url | relative_url }}">{{ report.title }}</a>
-      </h2>
-      <div class="report-summary">
-        {{ report.content | strip_html | truncatewords: 30 }}
-      </div>
-      <div class="report-meta">
-        <span>
-          {% assign words = report.content | strip_html | number_of_words %}
-          {% assign readtime = words | divided_by: 200 %}
-          {% if readtime == 0 %}1{% else %}{{ readtime }}{% endif %} min read
-        </span>
-      </div>
-    </article>
-  {% endfor %}
+<!-- System Designs Box -->
+<section class="section-container">
+  <h2 class="section-title">System Designs</h2>
+  <div class="reports-list">
+    {% if site.designs.size > 0 %}
+      {% for design in site.designs %}
+        <article class="report-card">
+          <h2>
+            <a href="{{ design.url | relative_url }}">{{ design.title }}</a>
+          </h2>
+          <div class="report-summary">
+            {{ design.content | strip_html | truncatewords: 30 }}
+          </div>
+          <div class="report-meta">
+            <span>
+              {% assign words = design.content | strip_html | number_of_words %}
+              {% assign readtime = words | divided_by: 200 %}
+              {% if readtime == 0 %}1{% else %}{{ readtime }}{% endif %} min read
+            </span>
+          </div>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p style="color: var(--tertiary); font-size: 15px;">No system designs uploaded yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+<!-- Security Reports Box -->
+<section class="section-container">
+  <h2 class="section-title">Security Reports</h2>
+  <div class="reports-list">
+    {% if site.reports.size > 0 %}
+      {% for report in site.reports %}
+        <article class="report-card">
+          <h2>
+            <a href="{{ report.url | relative_url }}">{{ report.title }}</a>
+          </h2>
+          <div class="report-summary">
+            {{ report.content | strip_html | truncatewords: 30 }}
+          </div>
+          <div class="report-meta">
+            <span>
+              {% assign words = report.content | strip_html | number_of_words %}
+              {% assign readtime = words | divided_by: 200 %}
+              {% if readtime == 0 %}1{% else %}{{ readtime }}{% endif %} min read
+            </span>
+          </div>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p style="color: var(--tertiary); font-size: 15px;">No reports uploaded yet.</p>
+    {% endif %}
+  </div>
 </section>

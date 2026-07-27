@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Watcher: High-Throughput Processing Engine | Software engineering portfolio featuring system designs and security reports.</title>
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🛡️</text></svg>">
+</head>
+<body class="dark">
+
+  <script>
+    // Theme toggle init script to prevent flashing
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light') {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    } else if (theme === 'dark') {
+      document.body.classList.add('dark');
+      document.body.classList.remove('light');
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    }
+  </script>
+
+  <div class="site-wrapper">
+    <header class="rpg-header">
+      <nav class="nav">
+        <div class="logo">
+          <a href="/">MyPortfolio</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li>
+            <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle Theme">
+              <!-- Sun / Moon SVG icon -->
+              <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <svg id="sun" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <main>
+      <article class="post-single">
+  <header class="post-header">
+    <h1>Watcher: High-Throughput Processing Engine</h1>
+    <div class="post-meta">
+      <span>Manohar Gonohal</span>
+      <span>&middot;</span>
+      <span>559 words</span>
+      <span>&middot;</span>
+      <span>
+        
+        
+        2 min read
+      </span>
+    </div>
+  </header>
+  
+  <div class="post-content">
+    <p>Here is the complete, focused system design for <strong>Watcher</strong>, tailored specifically to its role as the high-throughput processing engine consuming tasks from Scavenger, handling 200,000 files per day, and writing structured data into OpenSearch.</p>
+
+<hr />
+
+<h2 id="1-watchers-core-objective--architecture-role">1. Watcher’s Core Objective &amp; Architecture Role</h2>
+
+<p>While Scavenger handles scanning, signature matching, and queue generation, Watcher serves as the distributed processing and normalization engine. Its primary responsibilities are:</p>
+
+<ul>
+  <li><strong>Consuming</strong> rule-specific hit queues asynchronously.</li>
+  <li><strong>Fetching</strong> the flagged raw files safely from Google Cloud Storage (GCS).</li>
+  <li><strong>Parsing</strong> file structures, metadata, and extracting indicators of compromise (IOCs).</li>
+  <li><strong>Indexing</strong> clean, structured JSON payloads in OpenSearch at scale.</li>
+</ul>
+
+<h3 id="high-level-architecture-flowchart">High-Level Architecture Flowchart</h3>
+
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code> [Scavenger (Rule Scanner)] 
+            │
+            ▼ (Populates Rule-Specific Queues)
+ [RabbitMQ Message Broker]
+            │
+            ▼ (Async Push/Pull)
+ ┌─────────────────────────────────────────────────────────┐
+ │                Watcher Processing Engine                │
+ │  ├── 1. Async Consumer (aio-pika)                       │
+ │  ├── 2. Storage Streamer (Google Cloud Storage SDK)     │
+ │  ├── 3. Core Parser &amp; Extractor (Python 3.11+)          │
+ │  └── 4. Bulk Publisher (OpenSearch Client)              │
+ └─────────────────────────────────────────────────────────┘
+            │
+            ▼ (Bulk JSON Indexing)
+ [OpenSearch (Analyst Triage &amp; Dashboards)]
+</code></pre></div></div>
+
+<h4 id="detailed-architecture-board">Detailed Architecture Board</h4>
+<p><img src="/assets/images/watcher-flowchart.jpg" alt="Watcher Flowchart" /></p>
+
+<hr />
+
+<h2 id="2-deep-dive-into-watchers-internal-components">2. Deep Dive Into Watcher’s Internal Components</h2>
+
+<h3 id="a-the-ingestion--consumer-layer-aio-pika">A. The Ingestion &amp; Consumer Layer (<code class="language-plaintext highlighter-rouge">aio-pika</code>)</h3>
+<ul>
+  <li><strong>Role:</strong> Listens to RabbitMQ queues generated by Scavenger without blocking threads.</li>
+  <li><strong>Mechanism:</strong> Uses asynchronous AMQP consumers configured with a strict <code class="language-plaintext highlighter-rouge">prefetch_count</code> (e.g., 10 to 20 messages per worker pod) to balance memory load and throughput.</li>
+  <li><strong>Reliability:</strong> Utilizes manual message acknowledgment (ACK on successful index, NACK/DLQ on structural failure or corruption) to guarantee zero message loss during peak traffic spikes.</li>
+</ul>
+
+<h3 id="b-the-storage-fetcher-layer-google-cloud-storage-sdk">B. The Storage Fetcher Layer (Google Cloud Storage SDK)</h3>
+<ul>
+  <li><strong>Role:</strong> Securely retrieves raw files based on object paths provided in the Scavenger queue message.</li>
+  <li><strong>Optimization:</strong> Instead of loading entire large payloads blindly into memory, it uses bounded chunked streaming or temporary secure container storage (<code class="language-plaintext highlighter-rouge">/tmp</code> inside ephemeral worker pods) to protect against memory leaks.</li>
+</ul>
+
+<h3 id="c-the-core-parsing--normalization-engine">C. The Core Parsing &amp; Normalization Engine</h3>
+<ul>
+  <li><strong>Role:</strong> Decodes headers, extracts deep metadata, parses file structures, and flags indicators of compromise (IOCs).</li>
+  <li><strong>Implementation:</strong> Built using a modular Python architecture where specialized parsers handle different file types (PE headers, archives, scripts, documents, etc.) before formatting everything into a unified JSON schema.</li>
+</ul>
+
+<h3 id="d-the-bulk-ingestion-layer-opensearch-py">D. The Bulk Ingestion Layer (<code class="language-plaintext highlighter-rouge">opensearch-py</code>)</h3>
+<ul>
+  <li><strong>Role:</strong> Ships processed metadata efficiently to OpenSearch.</li>
+  <li><strong>Optimization:</strong> Implements asynchronous batching and bulk requests (e.g., flushing every 500 records or every 2 seconds) to prevent hammering the OpenSearch cluster with individual write operations.</li>
+</ul>
+
+<hr />
+
+<h2 id="3-scalability--resilience-strategy-200000-filesday">3. Scalability &amp; Resilience Strategy (200,000 Files/Day)</h2>
+
+<p>To sustain a continuous load of 200,000 files daily (~2.3 files per second on average, with higher peak bursts), Watcher is designed around horizontal scalability:</p>
+
+<ul>
+  <li><strong>Kubernetes &amp; Horizontal Pod Autoscaling (HPA / KEDA):</strong>
+    <ul>
+      <li>Watcher worker pods are containerized via Docker and deployed on Kubernetes.</li>
+      <li>KEDA (Kubernetes Event-driven Autoscaling) continuously monitors RabbitMQ queue depth. If Scavenger dumps a massive batch of files, KEDA instantly scales Watcher worker replicas up to handle the volume and scales them back down when the queue drains.</li>
+    </ul>
+  </li>
+  <li><strong>Dead-Letter Queue (DLQ) Isolation:</strong>
+    <ul>
+      <li>If a file is malformed, encrypted, or causes an unexpected parsing exception, Watcher catches the exception, logs the context, and routes the task payload to a DLQ. This prevents poison pills from blocking the main processing loop.</li>
+    </ul>
+  </li>
+  <li><strong>Stateless Worker Design:</strong>
+    <ul>
+      <li>Worker pods carry zero local persistent state. Every file is fetched fresh from GCS, processed entirely in memory or ephemeral storage, and written directly to OpenSearch. This allows any worker pod to crash, restart, or scale without risking data integrity.</li>
+    </ul>
+  </li>
+</ul>
+
+  </div>
+</article>
+
+    </main>
+
+    <footer class="rpg-footer">
+      <p>&copy; 2026 MyPortfolio. Built with Jekyll (PaperMod layout).</p>
+    </footer>
+  </div>
+
+  <script>
+    // Theme toggle button logic
+    const themeBtn = document.getElementById('theme-toggle');
+    const sunIcon = document.getElementById('sun');
+    const moonIcon = document.getElementById('moon');
+
+    function updateIcons() {
+      if (document.body.classList.contains('dark')) {
+        sunIcon.style.display = 'block';
+        moonIcon.style.display = 'none';
+      } else {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'block';
+      }
+    }
+
+    // Set initial icon states
+    updateIcons();
+
+    themeBtn.addEventListener('click', () => {
+      if (document.body.classList.contains('dark')) {
+        document.body.classList.remove('dark');
+        document.body.classList.add('light');
+        localStorage.setItem('theme', 'light');
+      } else {
+        document.body.classList.remove('light');
+        document.body.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      }
+      updateIcons();
+    });
+  </script>
+</body>
+</html>

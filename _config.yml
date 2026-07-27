@@ -1,5 +1,5 @@
-title: RE Reports
-description: Technical analysis, threat intelligence reports, and malware reverse engineering write-ups.
+title: MyPortfolio
+description: Software engineering portfolio featuring system designs and security reports.
 permalink: /:title/
 
 author: Manohar Gonohal
@@ -8,12 +8,20 @@ github_username: ManuMW
 collections:
   reports:
     output: true
-    permalink: /:title/
+    permalink: /reports/:title/
+  designs:
+    output: true
+    permalink: /designs/:title/
 
 defaults:
   - scope:
       path: ""
       type: reports
+    values:
+      layout: post
+  - scope:
+      path: ""
+      type: designs
     values:
       layout: post
 

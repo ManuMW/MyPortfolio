@@ -343,7 +343,6 @@ header.rpg-header {
   margin: 40px 0;
 }
 
-/* Footer */
 footer.rpg-footer {
   margin-top: auto;
   padding: 40px 0 30px;
@@ -352,3 +351,24 @@ footer.rpg-footer {
   color: var(--tertiary);
   border-top: 1px solid var(--border);
 }
+
+.section-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin: 50px 0 20px;
+  border-bottom: 2px solid var(--border);
+  padding-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.post-content img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 30px auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+
