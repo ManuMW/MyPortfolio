@@ -1,5 +1,5 @@
 ---
-title: "Package Poison Scanner — System Design"
+title: "Package Scanner — System Design"
 ---
 
 **A Kubernetes-native pipeline for detecting malicious packages in npm and PyPI at publish time.**
