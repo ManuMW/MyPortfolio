@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Package Poison Scanner — System Design | Software engineering portfolio featuring system designs and security reports.</title>
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🛡️</text></svg>">
+</head>
+<body class="dark">
+
+  <script>
+    // Theme toggle init script to prevent flashing
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light') {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    } else if (theme === 'dark') {
+      document.body.classList.add('dark');
+      document.body.classList.remove('light');
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    }
+  </script>
+
+  <div class="site-wrapper">
+    <header class="rpg-header">
+      <nav class="nav">
+        <div class="logo">
+          <a href="/">MyPortfolio</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li>
+            <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle Theme">
+              <!-- Sun / Moon SVG icon -->
+              <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <svg id="sun" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <main>
+      <article class="post-single">
+  <header class="post-header">
+    <h1>Package Poison Scanner — System Design</h1>
+    <div class="post-meta">
+      <span>Manohar Gonohal</span>
+      <span>&middot;</span>
+      <span>984 words</span>
+      <span>&middot;</span>
+      <span>
+        
+        
+        4 min read
+      </span>
+    </div>
+  </header>
+  
+  <div class="post-content">
+    <p><strong>A Kubernetes-native pipeline for detecting malicious packages in npm and PyPI at publish time.</strong></p>
+
+<h2 id="problem">Problem</h2>
+
+<p>Supply-chain attacks against open-source registries (typosquats, dependency
+confusion, compromised maintainer accounts) are usually discovered <em>after</em>
+they’ve already been pulled into production builds. The window between
+publish and detection is where the damage happens. This project closes that
+window by watching registry publish feeds in real time, pulling every new
+package into an isolated environment, and running it through static
+malware-detection heuristics — without ever executing the package’s code.</p>
+
+<h2 id="design-goals">Design goals</h2>
+
+<ol>
+  <li><strong>Never execute untrusted code.</strong> The entire pipeline only fetches and
+statically inspects packages — no <code class="language-plaintext highlighter-rouge">npm install</code>, no <code class="language-plaintext highlighter-rouge">pip install</code>, no
+running install-time scripts.</li>
+  <li><strong>Contain the blast radius.</strong> Every stage that touches a real package
+archive is disposable, sandboxed, and network-restricted, so a
+sufficiently hostile package can’t affect anything beyond its own
+short-lived job.</li>
+  <li><strong>Run unattended, indefinitely, on modest infrastructure.</strong> This is built
+for a single operator, not a SOC team — every technology choice favors
+low operational overhead over horizontal scale.</li>
+</ol>
+
+<h2 id="architecture">Architecture</h2>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>                    ┌─────────────────────┐
+  npm _changes  ──▶ │   Feed Listener      │   namespace: ingestion
+  PyPI JSON feed──▶ │  (long-running pod)  │   metadata only, no package
+                    └──────────┬───────────┘   contents ever touched
+                               │  {name, version, registry}
+                               ▼
+                    ┌─────────────────────┐
+                    │   Redis Stream       │   namespace: infra
+                    │   packages:new       │   consumer groups + XCLAIM retry
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │  Downloader Job      │   namespace: scanning
+                    │  fetch + safe-extract│   non-root, read-only rootfs,
+                    │  (one-shot, dies)    │   capabilities dropped, sandboxed
+                    └──────────┬───────────┘   runtime (gVisor)
+                               │  raw + extracted source
+                               ▼
+                    ┌─────────────────────┐
+                    │   Object Storage     │   namespace: infra
+                    │   (MinIO / S3)       │   keyed by name@version
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │   Scanner Job        │   namespace: scanning
+                    │   GuardDog (static   │   same hardening as downloader
+                    │   analysis only)     │   egress locked to registry API
+                    └──────────┬───────────┘
+                               │  verdict + indicators
+                               ▼
+                    ┌─────────────────────┐
+                    │   Elasticsearch      │   namespace: results
+                    │   + Kibana           │   dashboards, alerting rules
+                    └──────────┬───────────┘
+                               │  high severity
+                               ▼
+                        Slack webhook
+</code></pre></div></div>
+
+<h2 id="trust-boundaries">Trust boundaries</h2>
+
+<p>The system is split into three Kubernetes namespaces, each representing a
+different level of exposure to adversarial input:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Namespace</th>
+      <th>What runs there</th>
+      <th>Exposure to untrusted data</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">ingestion</code></td>
+      <td>Feed listener</td>
+      <td>None — only sees JSON metadata (name/version)</td>
+    </tr>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">scanning</code></td>
+      <td>Downloader Job, Scanner Job</td>
+      <td>Full — extracts and inspects raw package archives</td>
+    </tr>
+    <tr>
+      <td><code class="language-plaintext highlighter-rouge">results</code></td>
+      <td>Elasticsearch, Kibana, alerting</td>
+      <td>None — only sees structured verdict documents</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><code class="language-plaintext highlighter-rouge">infra</code> (Redis, MinIO) sits outside the three trust-boundary namespaces since
+it’s shared plumbing, not a compute stage.</p>
+
+<p>Each namespace has a <strong>default-deny NetworkPolicy</strong> with explicit allows only
+for what that stage actually needs — the scanning namespace, for example, can
+reach the npm/PyPI registry APIs and object storage, but nothing else.</p>
+
+<h2 id="why-packages-are-never-executed">Why packages are never executed</h2>
+
+<p>This is the load-bearing security property of the whole design. Most package
+malware triggers via install-time hooks — npm’s <code class="language-plaintext highlighter-rouge">postinstall</code> script, or
+Python’s <code class="language-plaintext highlighter-rouge">setup.py</code> running arbitrary code on <code class="language-plaintext highlighter-rouge">pip install</code>. By only ever
+downloading and extracting an archive — never installing it — the pipeline
+sidesteps the primary way these packages actually cause harm. GuardDog then
+performs <em>static</em> analysis: pattern-matching on source code, flagging
+suspicious install hooks and obfuscation, checking for typosquatting — all
+without needing to run anything.</p>
+
+<h2 id="why-kubernetes-jobs-not-long-lived-containers">Why Kubernetes Jobs, not long-lived containers</h2>
+
+<p>An earlier version of this design considered a pair of long-lived containers
+(one for the scanner tooling, one for pulling/scanning packages), reset
+periodically to avoid cross-contamination between packages. The final design
+goes further: the downloader and scanner are <strong>Kubernetes Jobs</strong> — one-shot
+workloads that run to completion and terminate. There is no “reset” step
+because there’s no persistent process to reset; every package gets a fresh
+pod, and <code class="language-plaintext highlighter-rouge">ttlSecondsAfterFinished</code> cleans up completed Jobs automatically.
+This removes an entire class of bugs where state from one package’s
+extraction could leak into the next.</p>
+
+<h2 id="sandbox-hardening-downloader--scanner-pods">Sandbox hardening (downloader + scanner pods)</h2>
+
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">runAsNonRoot: true</code></li>
+  <li><code class="language-plaintext highlighter-rouge">readOnlyRootFilesystem: true</code></li>
+  <li>All Linux capabilities dropped</li>
+  <li><code class="language-plaintext highlighter-rouge">emptyDir</code> extraction volume with a hard size limit (blunts decompression /
+zip-bomb attacks)</li>
+  <li>Archive extraction guards against path traversal (<code class="language-plaintext highlighter-rouge">../</code> entries) and
+symlink escapes</li>
+  <li>Sandboxed container runtime (gVisor) for kernel-level isolation on the
+component handling the most adversarial input — the downloader</li>
+  <li><code class="language-plaintext highlighter-rouge">automountServiceAccountToken: false</code> — no Kubernetes API access needed
+from inside these pods</li>
+</ul>
+
+<h2 id="data-flow-decoupling">Data flow decoupling</h2>
+
+<p>Rather than wiring stages directly together, every handoff goes through
+shared infrastructure so each stage can fail, retry, or scale independently:</p>
+
+<ul>
+  <li><strong>Feed listener → downloader</strong>: Redis Stream (<code class="language-plaintext highlighter-rouge">packages:new</code>), consumer
+groups with <code class="language-plaintext highlighter-rouge">XPENDING</code>/<code class="language-plaintext highlighter-rouge">XCLAIM</code> so a crashed downloader doesn’t lose work.</li>
+  <li><strong>Downloader → scanner</strong>: object storage (MinIO), keyed by
+<code class="language-plaintext highlighter-rouge">{registry}/{name}/{version}/</code> — also gives free deduplication and an
+audit trail of every artifact ever pulled.</li>
+  <li><strong>Scanner → alerting</strong>: Elasticsearch document write, with Kibana alerting
+rules firing a Slack webhook on high-severity verdicts.</li>
+</ul>
+
+<p><strong>Idempotency key</strong> throughout: <code class="language-plaintext highlighter-rouge">{registry}:{name}@{version}</code>. Any stage can
+check whether a package has already been processed and skip it.</p>
+
+<h2 id="tech-stack-and-why">Tech stack and why</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Component</th>
+      <th>Choice</th>
+      <th>Why</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Queue</td>
+      <td>Redis Streams</td>
+      <td>Simple to operate solo; persistence via AOF/RDB; consumer groups give retry semantics without a heavier broker</td>
+    </tr>
+    <tr>
+      <td>Object storage</td>
+      <td>MinIO</td>
+      <td>S3-compatible, trivial to self-host, swappable for real S3 later</td>
+    </tr>
+    <tr>
+      <td>Static scanner</td>
+      <td>GuardDog</td>
+      <td>Purpose-built for package supply-chain heuristics; never executes package code</td>
+    </tr>
+    <tr>
+      <td>Results store</td>
+      <td>Elasticsearch</td>
+      <td>Scan output is semi-structured (varying indicators, nested metadata) — a better fit than a rigid relational schema</td>
+    </tr>
+    <tr>
+      <td>Dashboard/alerting</td>
+      <td>Kibana</td>
+      <td>Comes free with Elasticsearch; built-in alerting rules cover Slack webhooks without a separate service</td>
+    </tr>
+    <tr>
+      <td>Autoscaling</td>
+      <td>KEDA</td>
+      <td>Scales downloader/scanner Jobs based on Redis stream lag — idle most of the time, scales up during publish bursts</td>
+    </tr>
+    <tr>
+      <td>Isolation runtime</td>
+      <td>gVisor</td>
+      <td>Kernel-level sandboxing for the pods handling raw, untrusted archives</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="what-this-demonstrates">What this demonstrates</h2>
+
+<ul>
+  <li>Threat modeling a data pipeline by trust boundary, not just by service</li>
+  <li>Defense in depth: no single control (non-root, read-only fs, network
+policy, sandboxed runtime, static-only analysis) is load-bearing alone</li>
+  <li>Event-driven, horizontally scalable design that still runs affordably for
+a single operator</li>
+  <li>Understanding of the actual mechanism of npm/PyPI supply-chain attacks
+(install-time script execution) and designing specifically against it</li>
+</ul>
+
+<h2 id="status--roadmap">Status / roadmap</h2>
+
+<ul class="task-list">
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Feed listener (npm + PyPI)</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Downloader with safe-extract guards</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Scanner with GuardDog integration</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Kubernetes manifests + NetworkPolicies</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />KEDA autoscaling</li>
+  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Kibana alerting → Slack</li>
+</ul>
+
+  </div>
+</article>
+
+    </main>
+
+    <footer class="rpg-footer">
+      <p>&copy; 2026 MyPortfolio. Built with Jekyll (PaperMod layout).</p>
+    </footer>
+  </div>
+
+  <script>
+    // Theme toggle button logic
+    const themeBtn = document.getElementById('theme-toggle');
+    const sunIcon = document.getElementById('sun');
+    const moonIcon = document.getElementById('moon');
+
+    function updateIcons() {
+      if (document.body.classList.contains('dark')) {
+        sunIcon.style.display = 'block';
+        moonIcon.style.display = 'none';
+      } else {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'block';
+      }
+    }
+
+    // Set initial icon states
+    updateIcons();
+
+    themeBtn.addEventListener('click', () => {
+      if (document.body.classList.contains('dark')) {
+        document.body.classList.remove('dark');
+        document.body.classList.add('light');
+        localStorage.setItem('theme', 'light');
+      } else {
+        document.body.classList.remove('light');
+        document.body.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      }
+      updateIcons();
+    });
+  </script>
+</body>
+</html>
