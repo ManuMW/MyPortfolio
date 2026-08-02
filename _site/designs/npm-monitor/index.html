@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Package Poison Scanner — System Design | Software engineering portfolio featuring system designs and security reports.</title>
+  <title>Npm-Monitor: Package Security Pipeline | Software engineering portfolio featuring system designs and security reports.</title>
   <link rel="stylesheet" href="/assets/css/style.css">
   <!-- Favicon -->
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🛡️</text></svg>">
@@ -59,258 +59,251 @@
     <main>
       <article class="post-single">
   <header class="post-header">
-    <h1>Package Poison Scanner — System Design</h1>
+    <h1>Npm-Monitor: Package Security Pipeline</h1>
     <div class="post-meta">
       <span>Manohar Gonohal</span>
       <span>&middot;</span>
-      <span>984 words</span>
+      <span>1168 words</span>
       <span>&middot;</span>
       <span>
         
         
-        4 min read
+        5 min read
       </span>
     </div>
   </header>
   
   <div class="post-content">
-    <p><strong>A Kubernetes-native pipeline for detecting malicious packages in npm and PyPI at publish time.</strong></p>
+    <p><strong>A Kubernetes-native pipeline for detecting malicious packages in npm and PyPI in real time via static heuristics and dynamic sandboxing.</strong></p>
 
-<h2 id="problem">Problem</h2>
+<p>This system design details the architecture of <strong>Npm-Monitor</strong>, an open-source, automated pipeline designed to mitigate supply-chain attacks. It is based on the implementation in the <a href="https://github.com/ManuMW/Npm-Monitor">ManuMW/Npm-Monitor</a> repository.</p>
 
-<p>Supply-chain attacks against open-source registries (typosquats, dependency
-confusion, compromised maintainer accounts) are usually discovered <em>after</em>
-they’ve already been pulled into production builds. The window between
-publish and detection is where the damage happens. This project closes that
-window by watching registry publish feeds in real time, pulling every new
-package into an isolated environment, and running it through static
-malware-detection heuristics — without ever executing the package’s code.</p>
+<hr />
 
-<h2 id="design-goals">Design goals</h2>
+<h2 id="the-problem">The Problem</h2>
+
+<p>Supply-chain attacks against package registries (npm typosquatting, dependency confusion, compromised developer accounts) are typically discovered <em>after</em> packages are integrated into builds. The window between a malicious package being published and its public disclosure is when the damage occurs.</p>
+
+<p><strong>Npm-Monitor</strong> closes this window by watching registry publish feeds in real time, downloading new packages (including pre-releases) into network-restricted sandbox environments, and scanning them with a dual static/dynamic analysis pipeline before they can infect developer environments or CI/CD pipelines.</p>
+
+<hr />
+
+<h2 id="design-goals">Design Goals</h2>
 
 <ol>
-  <li><strong>Never execute untrusted code.</strong> The entire pipeline only fetches and
-statically inspects packages — no <code class="language-plaintext highlighter-rouge">npm install</code>, no <code class="language-plaintext highlighter-rouge">pip install</code>, no
-running install-time scripts.</li>
-  <li><strong>Contain the blast radius.</strong> Every stage that touches a real package
-archive is disposable, sandboxed, and network-restricted, so a
-sufficiently hostile package can’t affect anything beyond its own
-short-lived job.</li>
-  <li><strong>Run unattended, indefinitely, on modest infrastructure.</strong> This is built
-for a single operator, not a SOC team — every technology choice favors
-low operational overhead over horizontal scale.</li>
+  <li><strong>Dual-Layer Analysis</strong>: Combine static parsing and active execution monitoring to catch obfuscated malware.</li>
+  <li><strong>Defensive Isolation</strong>: Execute untrusted code exclusively in disposable, kernel-isolated sandboxes (<code class="language-plaintext highlighter-rouge">gVisor</code>).</li>
+  <li><strong>Decoupled Architecture</strong>: Structure ingestion, storage, scanning, and indexing using message queues and object stores to scale parts of the pipeline independently.</li>
+  <li><strong>Comprehensive Ingestion</strong>: Listen to all published registry releases, specifically targeting pre-release versions (<code class="language-plaintext highlighter-rouge">alpha</code>, <code class="language-plaintext highlighter-rouge">beta</code>, <code class="language-plaintext highlighter-rouge">rc</code>) which are frequently used as delivery channels for early stage implants.</li>
 </ol>
 
-<h2 id="architecture">Architecture</h2>
+<hr />
 
-<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>                    ┌─────────────────────┐
-  npm _changes  ──▶ │   Feed Listener      │   namespace: ingestion
-  PyPI JSON feed──▶ │  (long-running pod)  │   metadata only, no package
-                    └──────────┬───────────┘   contents ever touched
-                               │  {name, version, registry}
-                               ▼
-                    ┌─────────────────────┐
-                    │   Redis Stream       │   namespace: infra
-                    │   packages:new       │   consumer groups + XCLAIM retry
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │  Downloader Job      │   namespace: scanning
-                    │  fetch + safe-extract│   non-root, read-only rootfs,
-                    │  (one-shot, dies)    │   capabilities dropped, sandboxed
-                    └──────────┬───────────┘   runtime (gVisor)
-                               │  raw + extracted source
-                               ▼
-                    ┌─────────────────────┐
-                    │   Object Storage     │   namespace: infra
-                    │   (MinIO / S3)       │   keyed by name@version
-                    └──────────┬───────────┘
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   Scanner Job        │   namespace: scanning
-                    │   GuardDog (static   │   same hardening as downloader
-                    │   analysis only)     │   egress locked to registry API
-                    └──────────┬───────────┘
-                               │  verdict + indicators
-                               ▼
-                    ┌─────────────────────┐
-                    │   Elasticsearch      │   namespace: results
-                    │   + Kibana           │   dashboards, alerting rules
-                    └──────────┬───────────┘
-                               │  high severity
-                               ▼
-                        Slack webhook
+<h2 id="system-architecture">System Architecture</h2>
+
+<p>The pipeline processes new packages sequentially through three trust boundaries (<code class="language-plaintext highlighter-rouge">ingestion</code>, <code class="language-plaintext highlighter-rouge">scanning</code>, and <code class="language-plaintext highlighter-rouge">results</code>). Shared plumbing runs in the <code class="language-plaintext highlighter-rouge">infra</code> boundary:</p>
+
+<div class="language-text highlighter-rouge"><div class="highlight"><pre class="highlight"><code>                        Public Registries (npm / PyPI)
+                                       │
+                                       │ HTTP Polling (inc. pre-releases)
+                                       ▼
+                       ┌──────────────────────────────┐
+                       │   feed-listener (Pod)        │   namespace: ingestion
+                       └──────────────┬───────────────┘
+                                      │ Publish {name, version, registry}
+                                      ▼
+                       ┌──────────────────────────────┐
+                       │   Redis Stream (packages:new)│   namespace: infra
+                       └──────────────┬───────────────┘
+                                      │
+                         ┌────────────┴────────────┐
+                         │  Job Dispatcher / KEDA  │
+                         └────────────┬────────────┘
+                                      │ Spawns Ephemeral Jobs
+                                      ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────┐
+ │ scanning namespace (Hardened Pod Sandboxes / gVisor)                             │
+ │                                                                                  │
+ │  ┌─────────────────────────┐  ┌─────────────────────────┐  ┌───────────────────┐ │
+ │  │    downloader (Job)     │  │  scanner (Static Job)   │  │  dynamic-scanner  │ │
+ │  │ ├─ GET archive          │  │ ├─ GuardDog Scan        │  │  │ (gVisor Job)   │ │
+ │  │ └─ SafeExtract Guard    │  │ └─ JS/TS AST Heuristics │  │ ├─ 30s Timeout    │ │
+ │  └───────────┬─────────────┘  └───────────┬─────────────┘  │ ├─ require() Exec │ │
+ └──────────────┼────────────────────────────┼────────────────│ └─ Proc/Net Monitor│ │
+                │                            │                └─────────┬─────────┘ │
+                │                            │                          │           │
+                ▼ Store Archives             ▼ Index Verdicts           ▼ Index Telemetry
+ ┌────────────────────────────┐  ┌────────────────────────────┐                     │
+ │   Object Storage (MinIO)   │  │ Elasticsearch / Kibana     │◄────────────────────┘
+ └────────────────────────────┘  └───────────┬────────────────┘   namespace: results
+                                             │ Trigger Alerts
+                                             ▼
+                                       Slack Webhook
 </code></pre></div></div>
 
-<h2 id="trust-boundaries">Trust boundaries</h2>
+<hr />
 
-<p>The system is split into three Kubernetes namespaces, each representing a
-different level of exposure to adversarial input:</p>
+<h2 id="trust-boundaries--hardened-execution">Trust Boundaries &amp; Hardened Execution</h2>
 
-<table>
-  <thead>
-    <tr>
-      <th>Namespace</th>
-      <th>What runs there</th>
-      <th>Exposure to untrusted data</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td><code class="language-plaintext highlighter-rouge">ingestion</code></td>
-      <td>Feed listener</td>
-      <td>None — only sees JSON metadata (name/version)</td>
-    </tr>
-    <tr>
-      <td><code class="language-plaintext highlighter-rouge">scanning</code></td>
-      <td>Downloader Job, Scanner Job</td>
-      <td>Full — extracts and inspects raw package archives</td>
-    </tr>
-    <tr>
-      <td><code class="language-plaintext highlighter-rouge">results</code></td>
-      <td>Elasticsearch, Kibana, alerting</td>
-      <td>None — only sees structured verdict documents</td>
-    </tr>
-  </tbody>
-</table>
-
-<p><code class="language-plaintext highlighter-rouge">infra</code> (Redis, MinIO) sits outside the three trust-boundary namespaces since
-it’s shared plumbing, not a compute stage.</p>
-
-<p>Each namespace has a <strong>default-deny NetworkPolicy</strong> with explicit allows only
-for what that stage actually needs — the scanning namespace, for example, can
-reach the npm/PyPI registry APIs and object storage, but nothing else.</p>
-
-<h2 id="why-packages-are-never-executed">Why packages are never executed</h2>
-
-<p>This is the load-bearing security property of the whole design. Most package
-malware triggers via install-time hooks — npm’s <code class="language-plaintext highlighter-rouge">postinstall</code> script, or
-Python’s <code class="language-plaintext highlighter-rouge">setup.py</code> running arbitrary code on <code class="language-plaintext highlighter-rouge">pip install</code>. By only ever
-downloading and extracting an archive — never installing it — the pipeline
-sidesteps the primary way these packages actually cause harm. GuardDog then
-performs <em>static</em> analysis: pattern-matching on source code, flagging
-suspicious install hooks and obfuscation, checking for typosquatting — all
-without needing to run anything.</p>
-
-<h2 id="why-kubernetes-jobs-not-long-lived-containers">Why Kubernetes Jobs, not long-lived containers</h2>
-
-<p>An earlier version of this design considered a pair of long-lived containers
-(one for the scanner tooling, one for pulling/scanning packages), reset
-periodically to avoid cross-contamination between packages. The final design
-goes further: the downloader and scanner are <strong>Kubernetes Jobs</strong> — one-shot
-workloads that run to completion and terminate. There is no “reset” step
-because there’s no persistent process to reset; every package gets a fresh
-pod, and <code class="language-plaintext highlighter-rouge">ttlSecondsAfterFinished</code> cleans up completed Jobs automatically.
-This removes an entire class of bugs where state from one package’s
-extraction could leak into the next.</p>
-
-<h2 id="sandbox-hardening-downloader--scanner-pods">Sandbox hardening (downloader + scanner pods)</h2>
-
-<ul>
-  <li><code class="language-plaintext highlighter-rouge">runAsNonRoot: true</code></li>
-  <li><code class="language-plaintext highlighter-rouge">readOnlyRootFilesystem: true</code></li>
-  <li>All Linux capabilities dropped</li>
-  <li><code class="language-plaintext highlighter-rouge">emptyDir</code> extraction volume with a hard size limit (blunts decompression /
-zip-bomb attacks)</li>
-  <li>Archive extraction guards against path traversal (<code class="language-plaintext highlighter-rouge">../</code> entries) and
-symlink escapes</li>
-  <li>Sandboxed container runtime (gVisor) for kernel-level isolation on the
-component handling the most adversarial input — the downloader</li>
-  <li><code class="language-plaintext highlighter-rouge">automountServiceAccountToken: false</code> — no Kubernetes API access needed
-from inside these pods</li>
-</ul>
-
-<h2 id="data-flow-decoupling">Data flow decoupling</h2>
-
-<p>Rather than wiring stages directly together, every handoff goes through
-shared infrastructure so each stage can fail, retry, or scale independently:</p>
-
-<ul>
-  <li><strong>Feed listener → downloader</strong>: Redis Stream (<code class="language-plaintext highlighter-rouge">packages:new</code>), consumer
-groups with <code class="language-plaintext highlighter-rouge">XPENDING</code>/<code class="language-plaintext highlighter-rouge">XCLAIM</code> so a crashed downloader doesn’t lose work.</li>
-  <li><strong>Downloader → scanner</strong>: object storage (MinIO), keyed by
-<code class="language-plaintext highlighter-rouge">{registry}/{name}/{version}/</code> — also gives free deduplication and an
-audit trail of every artifact ever pulled.</li>
-  <li><strong>Scanner → alerting</strong>: Elasticsearch document write, with Kibana alerting
-rules firing a Slack webhook on high-severity verdicts.</li>
-</ul>
-
-<p><strong>Idempotency key</strong> throughout: <code class="language-plaintext highlighter-rouge">{registry}:{name}@{version}</code>. Any stage can
-check whether a package has already been processed and skip it.</p>
-
-<h2 id="tech-stack-and-why">Tech stack and why</h2>
+<p>The system isolates components according to their level of exposure to untrusted data:</p>
 
 <table>
   <thead>
     <tr>
-      <th>Component</th>
-      <th>Choice</th>
-      <th>Why</th>
+      <th style="text-align: left">Namespace</th>
+      <th style="text-align: left">What Runs There</th>
+      <th style="text-align: left">Exposure to Untrusted Data</th>
+      <th style="text-align: left">Security Controls</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td>Queue</td>
-      <td>Redis Streams</td>
-      <td>Simple to operate solo; persistence via AOF/RDB; consumer groups give retry semantics without a heavier broker</td>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">ingestion</code></strong></td>
+      <td style="text-align: left">Feed listener</td>
+      <td style="text-align: left">None. Only processes metadata.</td>
+      <td style="text-align: left">Default-deny network policies; egress restricted to Redis and public registries.</td>
     </tr>
     <tr>
-      <td>Object storage</td>
-      <td>MinIO</td>
-      <td>S3-compatible, trivial to self-host, swappable for real S3 later</td>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">scanning</code></strong></td>
+      <td style="text-align: left">Downloader, Static Scanner, Dynamic Scanner</td>
+      <td style="text-align: left"><strong>Full</strong>. Interacts directly with unverified code.</td>
+      <td style="text-align: left">Runs inside <code class="language-plaintext highlighter-rouge">gVisor</code> (<code class="language-plaintext highlighter-rouge">runsc</code>) container runtime. Pods run as non-root with dropped capabilities (<code class="language-plaintext highlighter-rouge">capabilities.drop: [ALL]</code>), read-only root filesystems, and strict egress tracking.</td>
     </tr>
     <tr>
-      <td>Static scanner</td>
-      <td>GuardDog</td>
-      <td>Purpose-built for package supply-chain heuristics; never executes package code</td>
-    </tr>
-    <tr>
-      <td>Results store</td>
-      <td>Elasticsearch</td>
-      <td>Scan output is semi-structured (varying indicators, nested metadata) — a better fit than a rigid relational schema</td>
-    </tr>
-    <tr>
-      <td>Dashboard/alerting</td>
-      <td>Kibana</td>
-      <td>Comes free with Elasticsearch; built-in alerting rules cover Slack webhooks without a separate service</td>
-    </tr>
-    <tr>
-      <td>Autoscaling</td>
-      <td>KEDA</td>
-      <td>Scales downloader/scanner Jobs based on Redis stream lag — idle most of the time, scales up during publish bursts</td>
-    </tr>
-    <tr>
-      <td>Isolation runtime</td>
-      <td>gVisor</td>
-      <td>Kernel-level sandboxing for the pods handling raw, untrusted archives</td>
+      <td style="text-align: left"><strong><code class="language-plaintext highlighter-rouge">results</code></strong></td>
+      <td style="text-align: left">Elasticsearch, Kibana, alerting</td>
+      <td style="text-align: left">None. Only stores structured JSON alerts.</td>
+      <td style="text-align: left">Accessible only within internal networks; no access to scanning namespace.</td>
     </tr>
   </tbody>
 </table>
 
-<h2 id="what-this-demonstrates">What this demonstrates</h2>
+<hr />
+
+<h2 id="core-components--capabilities">Core Components &amp; Capabilities</h2>
+
+<h3 id="1-pre-release-feed-ingestion">1. Pre-Release Feed Ingestion</h3>
+<p>Malware authors often publish packages under pre-release tags (<code class="language-plaintext highlighter-rouge">beta</code>, <code class="language-plaintext highlighter-rouge">rc</code>, <code class="language-plaintext highlighter-rouge">alpha</code>) or non-<code class="language-plaintext highlighter-rouge">latest</code> tags to test their implants or avoid mainstream scanning. The <code class="language-plaintext highlighter-rouge">feed-listener</code> monitors registries by querying version history metadata directly:</p>
+<ul>
+  <li><strong>npm</strong>: Ingests CouchDB <code class="language-plaintext highlighter-rouge">_changes</code> feeds, parsing the full document version histories to capture release tags like <code class="language-plaintext highlighter-rouge">@joyfill/layouts@0.1.2-2773.beta.0</code>.</li>
+  <li><strong>PyPI</strong>: Polls the PyPI RSS/JSON feeds to extract and queue new publish releases.</li>
+</ul>
+
+<hr />
+
+<h3 id="2-defensive-decompression-safe_extractpy">2. Defensive Decompression (<code class="language-plaintext highlighter-rouge">safe_extract.py</code>)</h3>
+<p>Package archives (e.g., <code class="language-plaintext highlighter-rouge">.tgz</code>, <code class="language-plaintext highlighter-rouge">.whl</code>) are parsed by the downloader using strict defensive boundaries to prevent exploitation during extraction:</p>
+<ul>
+  <li><strong>Path Traversal Guard</strong>: Explicitly rejects files containing directory traversal tokens (like <code class="language-plaintext highlighter-rouge">../</code>), preventing malware from writing files outside the target directory (e.g., overwriting <code class="language-plaintext highlighter-rouge">~/.bashrc</code> or <code class="language-plaintext highlighter-rouge">/etc/passwd</code>).</li>
+  <li><strong>Decompression Bomb Guard</strong>: Enforces a strict limit (default <code class="language-plaintext highlighter-rouge">100MB</code>) on uncompressed sizes to neutralize zip-bomb attacks that seek to crash the host node.</li>
+  <li><strong>Symlink Escape Guard</strong>: Validates that all symlinks extracted point strictly within the destination directory root, rejecting links pointing to host paths.</li>
+</ul>
+
+<hr />
+
+<h3 id="3-dual-layer-scanning-pipeline">3. Dual-Layer Scanning Pipeline</h3>
+
+<h4 id="a-static-analysis">A. Static Analysis</h4>
+<p>The static scanner combines community rulesets with custom abstract syntax tree (AST) matching to find high-signal indicators of malicious intent:</p>
+<ul>
+  <li><strong>GuardDog Integration</strong>: Identifies structural patterns such as unexpected package metadata, missing repositories, and basic exfiltration heuristics.</li>
+  <li><strong>Custom JS/TS AST Heuristics</strong>: Analyzes JavaScript source code structures without executing them:
+    <ul>
+      <li>Detects advanced obfuscation (dense string arrays, encoding, hex formatting).</li>
+      <li>Flags execution hooks embedded in lifecycle scripts (e.g., npm <code class="language-plaintext highlighter-rouge">preinstall</code> or <code class="language-plaintext highlighter-rouge">postinstall</code>).</li>
+      <li>Identifies multi-blockchain C2 resolvers that fetch C2 destinations from Tron, Aptos, or BSC smart contract transactions.</li>
+      <li>Spots sandbox evasion checks targeting virtualization variables (e.g., detecting <code class="language-plaintext highlighter-rouge">github-runner</code>, <code class="language-plaintext highlighter-rouge">microsoft-standard-WSL2</code>, or common docker paths).</li>
+    </ul>
+  </li>
+</ul>
+
+<h4 id="b-dynamic-sandbox-analysis">B. Dynamic Sandbox Analysis</h4>
+<p>Static analysis is often bypassed by obfuscated or dynamic payload loaders. The dynamic scanner resolves this by running the code inside a highly secured container environment:</p>
+<ul>
+  <li><strong>Isolation runtime</strong>: Containers run on the <code class="language-plaintext highlighter-rouge">gVisor</code> (<code class="language-plaintext highlighter-rouge">runsc</code>) sandbox runtime to restrict system call access to the host Linux kernel.</li>
+  <li><strong>30-Second hard timeout</strong>: Blunts endless loops and stalls.</li>
+  <li><strong>Import-time execution</strong>: Simulates how a developer imports the module by running package entry points (e.g., executing <code class="language-plaintext highlighter-rouge">require('malicious-module')</code> or importing Python modules).</li>
+  <li><strong>System Call &amp; Process Auditing</strong>: Monitors process creations (e.g., spawning shell instances like <code class="language-plaintext highlighter-rouge">powershell</code>, <code class="language-plaintext highlighter-rouge">cmd.exe</code>, <code class="language-plaintext highlighter-rouge">xclip</code>, or <code class="language-plaintext highlighter-rouge">pbpaste</code>).</li>
+  <li><strong>Network Egress Guard</strong>: Audits and drops network calls to capture exfiltration strings and record active C2 IP addresses.</li>
+</ul>
+
+<hr />
+
+<h2 id="data-decoupling--queue-management">Data Decoupling &amp; Queue Management</h2>
+
+<p>The pipeline uses message queues and object stores to decouple stages and prevent bottlenecks:</p>
+<ul>
+  <li><strong>Redis Streams</strong>: The <code class="language-plaintext highlighter-rouge">feed-listener</code> publishes raw metadata into the <code class="language-plaintext highlighter-rouge">packages:new</code> stream. Consumer groups allow workers to claim and process tasks. If a worker pod crashes mid-scan, <code class="language-plaintext highlighter-rouge">XCLAIM</code> retries ensure the package is re-scanned.</li>
+  <li><strong>KEDA (Kubernetes Event-driven Autoscaling)</strong>: KEDA monitors Redis stream lag. When registries experience large bursts of publishes, KEDA spins up ephemeral <code class="language-plaintext highlighter-rouge">ScaledJobs</code> in Kubernetes. Pods scale to zero when the stream is empty to save resources.</li>
+  <li><strong>Object Storage</strong>: Extracted files and raw tarballs are persisted in MinIO/S3 using the key format <code class="language-plaintext highlighter-rouge">{registry}/{name}/{version}/</code>. This allows the static and dynamic scanners to fetch source structures independently without re-downloading files from public registries.</li>
+</ul>
+
+<hr />
+
+<h2 id="tech-stack--architecture-choices">Tech Stack &amp; Architecture Choices</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: left">Component</th>
+      <th style="text-align: left">Choice</th>
+      <th style="text-align: left">Rationale</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left"><strong>Broker</strong></td>
+      <td style="text-align: left">Redis Streams</td>
+      <td style="text-align: left">Provides persistent queuing, consumer groups, and retry state with low operational overhead.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Object Store</strong></td>
+      <td style="text-align: left">MinIO</td>
+      <td style="text-align: left">S3-compatible object storage that can be self-hosted locally and scales to real AWS S3 easily.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Autoscaler</strong></td>
+      <td style="text-align: left">KEDA</td>
+      <td style="text-align: left">Handles event-driven scaling of Kubernetes Jobs directly from Redis queue depth.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Sandbox Runtime</strong></td>
+      <td style="text-align: left">gVisor (<code class="language-plaintext highlighter-rouge">runsc</code>)</td>
+      <td style="text-align: left">Provides kernel-level virtualization for running untrusted container payloads safely.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Database</strong></td>
+      <td style="text-align: left">Elasticsearch</td>
+      <td style="text-align: left">Indexes nested, semi-structured JSON verdicts containing AST and dynamic trace metadata.</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Heuristic Engines</strong></td>
+      <td style="text-align: left">GuardDog &amp; <code class="language-plaintext highlighter-rouge">safe_extract</code></td>
+      <td style="text-align: left">Lightweight, purpose-built engines for identifying supply-chain threats without complex dependencies.</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="getting-started--repository-reference">Getting Started &amp; Repository Reference</h2>
+
+<p>To explore the pipeline implementation, configure local stacks, or run the test suite, reference the official repository:</p>
 
 <ul>
-  <li>Threat modeling a data pipeline by trust boundary, not just by service</li>
-  <li>Defense in depth: no single control (non-root, read-only fs, network
-policy, sandboxed runtime, static-only analysis) is load-bearing alone</li>
-  <li>Event-driven, horizontally scalable design that still runs affordably for
-a single operator</li>
-  <li>Understanding of the actual mechanism of npm/PyPI supply-chain attacks
-(install-time script execution) and designing specifically against it</li>
+  <li><strong>Repository</strong>: <a href="https://github.com/ManuMW/Npm-Monitor">github.com/ManuMW/Npm-Monitor</a></li>
 </ul>
 
-<h2 id="status--roadmap">Status / roadmap</h2>
+<h3 id="run-automated-tests-locally">Run Automated Tests Locally</h3>
+<p>To verify the path-traversal prevention, decompression guards, ingestion processes, and analysis components, run the pytest suite:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>python3 <span class="nt">-m</span> pytest
+</code></pre></div></div>
 
-<ul class="task-list">
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Feed listener (npm + PyPI)</li>
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Downloader with safe-extract guards</li>
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Scanner with GuardDog integration</li>
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Kubernetes manifests + NetworkPolicies</li>
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />KEDA autoscaling</li>
-  <li class="task-list-item"><input type="checkbox" class="task-list-item-checkbox" disabled="disabled" />Kibana alerting → Slack</li>
-</ul>
+<h3 id="seeding-packages-to-pipeline">Seeding Packages to Pipeline</h3>
+<p>You can test ingestion by seeding mock packages:</p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c"># Seed a package with pre-release tags and blockchain C2 resolvers</span>
+python3 scripts/seed-test-package.py <span class="nt">--name</span> @joyfill/layouts <span class="nt">--version</span> 0.1.2-2773.beta.0 <span class="nt">--registry</span> npm
+</code></pre></div></div>
 
   </div>
 </article>

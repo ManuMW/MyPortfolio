@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Technical Analysis of Trojanized Sciter-Engine Spyware | Software engineering portfolio featuring system designs and security reports.</title>
+  <link rel="stylesheet" href="/assets/css/style.css">
+  <!-- Favicon -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22 width=%22100%22 height=%22100%22><text y=%220.9em%22 font-size=%2290%22>🛡️</text></svg>">
+</head>
+<body class="dark">
+
+  <script>
+    // Theme toggle init script to prevent flashing
+    const theme = localStorage.getItem('theme');
+    if (theme === 'light') {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    } else if (theme === 'dark') {
+      document.body.classList.add('dark');
+      document.body.classList.remove('light');
+    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+    }
+  </script>
+
+  <div class="site-wrapper">
+    <header class="rpg-header">
+      <nav class="nav">
+        <div class="logo">
+          <a href="/">MyPortfolio</a>
+        </div>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li>
+            <button class="theme-toggle-btn" id="theme-toggle" aria-label="Toggle Theme">
+              <!-- Sun / Moon SVG icon -->
+              <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <svg id="sun" style="display: none;" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    <main>
+      <article class="post-single">
+  <header class="post-header">
+    <h1>Technical Analysis of Trojanized Sciter-Engine Spyware</h1>
+    <div class="post-meta">
+      <span>Manohar Gonohal</span>
+      <span>&middot;</span>
+      <span>1858 words</span>
+      <span>&middot;</span>
+      <span>
+        
+        
+        9 min read
+      </span>
+    </div>
+  </header>
+  
+  <div class="post-content">
+    <p><strong>Published</strong>: August 2, 2026<br />
+<strong>Author</strong>: Antigravity Threat Research &amp; Malware Analysis Team<br />
+<strong>Tooling</strong>: Ghidra 11+ via Ghidra MCP, Python 3.14, <code class="language-plaintext highlighter-rouge">pefile</code>, <code class="language-plaintext highlighter-rouge">yara-python</code></p>
+
+<hr />
+
+<h2 id="executive-summary">Executive Summary</h2>
+
+<p>Threat actors frequently wrap malicious capabilities inside legitimate third-party desktop application frameworks to blend in with normal system traffic, defeat simple heuristic detectors, and evade traditional static analysis. In this technical blog post, we perform an in-depth reverse engineering analysis of the 64-bit Windows malware sample <strong><code class="language-plaintext highlighter-rouge">34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c.exe</code></strong>.</p>
+
+<p>Using <strong>Ghidra via Ghidra MCP</strong>, we decompiled the core subroutines, updated default Ghidra function identifiers (<code class="language-plaintext highlighter-rouge">FUN_...</code>) with descriptive names, mapped out the full command-and-control (C2) network exfiltration layer, analyzed the screen capture module, and documented anti-analysis &amp; defense evasion techniques.</p>
+
+<h3 id="key-findings">Key Findings</h3>
+<ul>
+  <li><strong>Framework Trojanization</strong>: The binary embeds the <strong>Sciter HTML/CSS desktop engine</strong> (<code class="language-plaintext highlighter-rouge">sciter-x.dll</code>, <code class="language-plaintext highlighter-rouge">TIScript</code>, <code class="language-plaintext highlighter-rouge">master.css</code>), utilizing custom HTML/CSS resources for user interface rendering and background script dispatching.</li>
+  <li><strong>Unpacked Native Executable</strong>: Comprehensive entropy analysis confirms the file is <strong>NOT packed</strong> with traditional runtime packers (such as UPX, Themida, or VMProtect). Standard MSVC PE sections exist with native <code class="language-plaintext highlighter-rouge">.text</code> code entropy of <strong>6.4591</strong>.</li>
+  <li><strong>In-Memory TIScript Execution</strong>: The sample does <strong>NOT drop external script files</strong> (<code class="language-plaintext highlighter-rouge">.ps1</code>, <code class="language-plaintext highlighter-rouge">.vbs</code>, <code class="language-plaintext highlighter-rouge">.bat</code>, <code class="language-plaintext highlighter-rouge">.cmd</code>) to disk. Instead, UI events and background tasks are evaluated entirely in memory using Sciter’s embedded <strong>TIScript virtual machine</strong> (<code class="language-plaintext highlighter-rouge">SciterVmEval</code> / <code class="language-plaintext highlighter-rouge">TIScriptAPI</code>).</li>
+  <li><strong>SSL Certificate Verification Bypass</strong>: The malware includes a WinINet HTTP wrapper (<code class="language-plaintext highlighter-rouge">SendHttpRequestWithSSLBypass</code>) that intercepts invalid CA errors (<code class="language-plaintext highlighter-rouge">ERROR_INTERNET_INVALID_CA</code> / <code class="language-plaintext highlighter-rouge">0x2F0D</code>) and dynamically overrides security options (<code class="language-plaintext highlighter-rouge">INTERNET_OPTION_SECURITY_FLAGS</code>) using <code class="language-plaintext highlighter-rouge">SECURITY_FLAG_IGNORE_UNKNOWN_CA</code> (<code class="language-plaintext highlighter-rouge">0x100</code>) to force encrypted data exfiltration to self-signed or untrusted C2 servers.</li>
+  <li><strong>Desktop Screen Capture Capability</strong>: The binary features an offscreen desktop screen grabbing module (<code class="language-plaintext highlighter-rouge">CreateDesktopScreenBitmap</code> and <code class="language-plaintext highlighter-rouge">ExtractDIBitsFromBitmap</code>) utilizing <code class="language-plaintext highlighter-rouge">GetDC(NULL)</code>, <code class="language-plaintext highlighter-rouge">CreateCompatibleBitmap</code>, <code class="language-plaintext highlighter-rouge">GetDIBits</code>, and <code class="language-plaintext highlighter-rouge">DrawIconEx</code> to capture full desktop frames and convert them into raw DIB pixel streams.</li>
+  <li><strong>Dynamic C2 Resolution</strong>: Target C2 URLs are resolved dynamically at runtime/in-memory to defeat static plain-text string extraction tools.</li>
+  <li><strong>Authenticode Overlay</strong>: The binary appends a <strong>21,424-byte high-entropy overlay</strong> containing a PKCS#7 / Authenticode Digital Signature Certificate table (<code class="language-plaintext highlighter-rouge">0x3082...</code>) to impersonate legitimate signed software.</li>
+</ul>
+
+<hr />
+
+<h2 id="file-metadata--technical-specifications">File Metadata &amp; Technical Specifications</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: left">Parameter</th>
+      <th style="text-align: left">Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left"><strong>Filename</strong></td>
+      <td style="text-align: left"><code class="language-plaintext highlighter-rouge">34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c.exe</code></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>File Size</strong></td>
+      <td style="text-align: left">4,231,600 Bytes (4.04 MB)</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Architecture</strong></td>
+      <td style="text-align: left">x86_64 (AMD64 64-bit LE)</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Image Base</strong></td>
+      <td style="text-align: left"><code class="language-plaintext highlighter-rouge">0x180000000</code></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>MD5 Hash</strong></td>
+      <td style="text-align: left"><code class="language-plaintext highlighter-rouge">ffcca2a80c1ccc7207d3a8e0fc48104e</code></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>SHA1 Hash</strong></td>
+      <td style="text-align: left"><code class="language-plaintext highlighter-rouge">bf9ed1540471faf4bea966462ef08a5c1cc50e8b</code></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>SHA256 Hash</strong></td>
+      <td style="text-align: left"><code class="language-plaintext highlighter-rouge">34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c</code></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Overall Entropy</strong></td>
+      <td style="text-align: left"><strong>6.5292 / 8.0</strong></td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Subsystem</strong></td>
+      <td style="text-align: left">Windows GUI</td>
+    </tr>
+    <tr>
+      <td style="text-align: left"><strong>Function Count</strong></td>
+      <td style="text-align: left">10,523 subroutines</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="pe-section-entropy-table">PE Section Entropy Table</h3>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>----------------------------------------------------------------------
+Name       Raw Ptr      Raw Size     Virt Addr    Entropy   
+----------------------------------------------------------------------
+.text      0x00000400   0x00315200   0x00001000   6.4591 (Code)
+.rdata     0x00315600   0x0009FC00   0x00317000   5.6717 (Imports/Strings)
+.data      0x003B5200   0x00016800   0x003B7000   3.8559 (Globals)
+.pdata     0x003CBA00   0x00019E00   0x003D1000   6.2042 (SEH Unwind)
+.fptable   0x003E5800   0x00000200   0x003EB000   0.0000 (Guard)
+.rsrc      0x003E5A00   0x00014200   0x003EC000   6.2796 (Sciter/Icons)
+.reloc     0x003F9C00   0x0000A200   0x00401000   5.4409 (Relocations)
+----------------------------------------------------------------------
+[!] OVERLAY : Offset 0x403E00 | Size: 21,424 Bytes | Entropy: 7.5965
+</code></pre></div></div>
+
+<hr />
+
+<h2 id="high-level-execution-architecture">High-Level Execution Architecture</h2>
+
+<pre><code class="language-mermaid">flowchart TD
+    A["Main Execution Entry Point"] --&gt; B["Resolve Dynamic APIs &amp; Load API Sets&lt;br/&gt;(ResolveApiSetLibraryProc @ 0x1802d7d70)"]
+    B --&gt; C["Host Fingerprinting &amp; System Discovery&lt;br/&gt;(GetHostComputerNameFingerprint @ 0x1800325b0)"]
+    C --&gt; D["Anti-Analysis &amp; Debugger Check&lt;br/&gt;(CheckDebuggerAndHandleException @ 0x1802d6578)"]
+    D --&gt; E["Desktop Screen Capture Engine&lt;br/&gt;(CreateDesktopScreenBitmap @ 0x18007a6f0 &amp; ExtractDIBitsFromBitmap @ 0x180081520)"]
+    E --&gt; F["Async Network Worker Dispatcher&lt;br/&gt;(HttpRequestWorkerThreadProc @ 0x180134c20)"]
+    F --&gt; G["HTTP/HTTPS Exfiltration with SSL Bypass&lt;br/&gt;(SendHttpRequestWithSSLBypass @ 0x180133e34)"]
+    G --&gt; H["C2 Server Communication"]
+</code></pre>
+
+<hr />
+
+<h2 id="reverse-engineering-deep-dive--function-breakdown">Reverse Engineering Deep Dive &amp; Function Breakdown</h2>
+
+<p>During our investigation, we renamed key subroutines in the Ghidra database to map the binary’s internal logic cleanly. Below are the decompiled functions along with detailed technical breakdowns.</p>
+
+<h3 id="1-network-exfiltration-engine--ssl-bypass-sendhttprequestwithsslbypass">1. Network Exfiltration Engine &amp; SSL Bypass (<code class="language-plaintext highlighter-rouge">SendHttpRequestWithSSLBypass</code>)</h3>
+
+<p><strong>Address</strong>: <code class="language-plaintext highlighter-rouge">0x180133e34</code><br />
+<strong>Ghidra Name</strong>: <code class="language-plaintext highlighter-rouge">SendHttpRequestWithSSLBypass</code> (Renamed from <code class="language-plaintext highlighter-rouge">FUN_180133e34</code>)<br />
+<strong>Behavior</strong>: High-Severity Data Exfiltration &amp; Defense Evasion</p>
+
+<h4 id="decompiled-code-snippet">Decompiled Code Snippet:</h4>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">undefined8</span> <span class="nf">SendHttpRequestWithSSLBypass</span><span class="p">(</span><span class="n">undefined8</span> <span class="n">param_1</span><span class="p">,</span> <span class="n">undefined8</span> <span class="n">param_2</span><span class="p">,</span> 
+                                       <span class="n">undefined4</span> <span class="n">param_3</span><span class="p">,</span> <span class="n">undefined8</span> <span class="n">param_4</span><span class="p">,</span> 
+                                       <span class="n">undefined4</span> <span class="n">param_5</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="kt">int</span> <span class="n">iVar1</span><span class="p">;</span>
+  <span class="n">DWORD</span> <span class="n">DVar2</span><span class="p">;</span>
+  <span class="n">HWND</span> <span class="n">pHVar3</span><span class="p">;</span>
+  <span class="n">undefined8</span> <span class="n">uVar4</span><span class="p">;</span>
+  <span class="n">undefined4</span> <span class="n">uVar5</span><span class="p">;</span>
+  <span class="n">uint</span> <span class="n">local_18</span> <span class="p">[</span><span class="mi">4</span><span class="p">];</span>
+  
+  <span class="n">uVar4</span> <span class="o">=</span> <span class="n">CONCAT44</span><span class="p">((</span><span class="kt">int</span><span class="p">)((</span><span class="n">ulonglong</span><span class="p">)</span><span class="n">in_stack_ffffffffffffffd8</span> <span class="o">&gt;&gt;</span> <span class="mh">0x20</span><span class="p">),</span> <span class="n">param_5</span><span class="p">);</span>
+
+  <span class="c1">// Attempt initial HTTP request</span>
+  <span class="n">iVar1</span> <span class="o">=</span> <span class="n">HttpSendRequestA</span><span class="p">();</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">iVar1</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">return</span> <span class="mi">1</span><span class="p">;</span> <span class="c1">// Success</span>
+  <span class="p">}</span>
+
+  <span class="c1">// Intercept error code</span>
+  <span class="n">DVar2</span> <span class="o">=</span> <span class="n">GetLastError</span><span class="p">();</span>
+
+  <span class="c1">// 0x2F0D = ERROR_INTERNET_INVALID_CA (Invalid or Untrusted CA Certificate)</span>
+  <span class="k">if</span> <span class="p">((</span><span class="n">DVar2</span> <span class="o">==</span> <span class="mh">0x2f0d</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">DAT_1803bb42c</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">))</span> <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">DAT_1803bb42c</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+      <span class="n">pHVar3</span> <span class="o">=</span> <span class="n">GetDesktopWindow</span><span class="p">();</span>
+      <span class="n">uVar5</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+      <span class="n">iVar1</span> <span class="o">=</span> <span class="n">InternetErrorDlg</span><span class="p">(</span><span class="n">pHVar3</span><span class="p">,</span> <span class="n">param_1</span><span class="p">,</span> <span class="mh">0x2f0d</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">iVar1</span> <span class="o">==</span> <span class="mh">0x4c7</span><span class="p">)</span> <span class="k">goto</span> <span class="n">LAB_180133f24</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">else</span> <span class="p">{</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">DAT_1803bb42c</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">)</span> <span class="k">goto</span> <span class="n">LAB_180133f24</span><span class="p">;</span>
+
+      <span class="c1">// Query current security flags (Option 0x1F = INTERNET_OPTION_SECURITY_FLAGS)</span>
+      <span class="n">local_18</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mi">4</span><span class="p">;</span>
+      <span class="n">InternetQueryOptionA</span><span class="p">(</span><span class="n">param_1</span><span class="p">,</span> <span class="mh">0x1f</span><span class="p">,</span> <span class="n">local_18</span><span class="p">,</span> <span class="n">local_18</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">uVar4</span><span class="p">);</span>
+      <span class="n">uVar5</span> <span class="o">=</span> <span class="p">(</span><span class="n">undefined4</span><span class="p">)((</span><span class="n">ulonglong</span><span class="p">)</span><span class="n">uVar4</span> <span class="o">&gt;&gt;</span> <span class="mh">0x20</span><span class="p">);</span>
+
+      <span class="c1">// Bitwise OR with 0x100 = SECURITY_FLAG_IGNORE_UNKNOWN_CA</span>
+      <span class="n">local_18</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">local_18</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">|</span> <span class="mh">0x100</span><span class="p">;</span>
+      <span class="n">InternetSetOptionA</span><span class="p">(</span><span class="n">param_1</span><span class="p">,</span> <span class="mh">0x1f</span><span class="p">,</span> <span class="n">local_18</span><span class="p">);</span>
+    <span class="p">}</span>
+
+    <span class="c1">// Retry HTTP request with disabled SSL verification</span>
+    <span class="n">uVar4</span> <span class="o">=</span> <span class="n">HttpSendRequestA</span><span class="p">(</span><span class="n">param_1</span><span class="p">,</span> <span class="n">param_2</span><span class="p">,</span> <span class="n">param_3</span><span class="p">,</span> <span class="n">param_4</span><span class="p">,</span> <span class="n">CONCAT44</span><span class="p">(</span><span class="n">uVar5</span><span class="p">,</span> <span class="n">param_5</span><span class="p">));</span>
+  <span class="p">}</span>
+  <span class="k">else</span> <span class="p">{</span>
+<span class="nl">LAB_180133f24:</span>
+    <span class="n">uVar4</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">uVar4</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h4 id="technical-analysis">Technical Analysis:</h4>
+<ol>
+  <li><code class="language-plaintext highlighter-rouge">SendHttpRequestWithSSLBypass</code> attempts to transmit data to the C2 server using standard WinINet <code class="language-plaintext highlighter-rouge">HttpSendRequestA</code>.</li>
+  <li>If <code class="language-plaintext highlighter-rouge">HttpSendRequestA</code> fails with error <code class="language-plaintext highlighter-rouge">0x2F0D</code> (<code class="language-plaintext highlighter-rouge">ERROR_INTERNET_INVALID_CA</code>), it checks global mode <code class="language-plaintext highlighter-rouge">DAT_1803bb42c</code>.</li>
+  <li>If mode equals <code class="language-plaintext highlighter-rouge">2</code>, it queries <code class="language-plaintext highlighter-rouge">INTERNET_OPTION_SECURITY_FLAGS</code> (<code class="language-plaintext highlighter-rouge">0x1F</code>) via <code class="language-plaintext highlighter-rouge">InternetQueryOptionA</code>, injects <code class="language-plaintext highlighter-rouge">SECURITY_FLAG_IGNORE_UNKNOWN_CA</code> (<code class="language-plaintext highlighter-rouge">0x100</code>), and writes back the flags via <code class="language-plaintext highlighter-rouge">InternetSetOptionA</code>.</li>
+  <li>It immediately retries <code class="language-plaintext highlighter-rouge">HttpSendRequestA</code>, enabling the malware to communicate seamlessly over encrypted HTTPS channels even when using self-signed, invalid, or intercepted certificates.</li>
+</ol>
+
+<hr />
+
+<h3 id="2-full-http-request-execution-dispatcher-executenetworkhttprequest">2. Full HTTP Request Execution Dispatcher (<code class="language-plaintext highlighter-rouge">ExecuteNetworkHttpRequest</code>)</h3>
+
+<p><strong>Address</strong>: <code class="language-plaintext highlighter-rouge">0x180134c44</code><br />
+<strong>Ghidra Name</strong>: <code class="language-plaintext highlighter-rouge">ExecuteNetworkHttpRequest</code> (Renamed from <code class="language-plaintext highlighter-rouge">FUN_180134c44</code>)<br />
+<strong>Behavior</strong>: C2 Connection Building, URL Parameter Formatting, Protocol Selection</p>
+
+<h4 id="key-code-snippet">Key Code Snippet:</h4>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">ExecuteNetworkHttpRequest</span><span class="p">(</span><span class="n">longlong</span> <span class="n">param_1</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="c1">// ... local variable initialization ...</span>
+  
+  <span class="c1">// Establish socket connection to target host</span>
+  <span class="n">lVar8</span> <span class="o">=</span> <span class="n">InternetConnectA</span><span class="p">(</span><span class="n">DAT_1803cff88</span><span class="p">,</span> <span class="n">puVar2</span> <span class="o">+</span> <span class="mi">3</span><span class="p">,</span> <span class="n">local_1528</span> <span class="o">&amp;</span> <span class="mh">0xffff</span><span class="p">,</span> <span class="n">local_14f8</span> <span class="o">+</span> <span class="mi">3</span><span class="p">);</span>
+  <span class="o">*</span><span class="p">(</span><span class="n">longlong</span> <span class="o">*</span><span class="p">)(</span><span class="n">param_1</span> <span class="o">+</span> <span class="mh">0x28</span><span class="p">)</span> <span class="o">=</span> <span class="n">lVar8</span><span class="p">;</span>
+  
+  <span class="c1">// Format query parameters into standard URL encoding (Key=Value&amp;Key2=Value2)</span>
+  <span class="c1">// ... parameter formatting loop ...</span>
+  
+  <span class="c1">// Select HTTP Method</span>
+  <span class="n">iVar4</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="kt">int</span> <span class="o">*</span><span class="p">)(</span><span class="o">*</span><span class="p">(</span><span class="n">longlong</span> <span class="o">*</span><span class="p">)(</span><span class="n">param_1</span> <span class="o">+</span> <span class="mh">0x18</span><span class="p">)</span> <span class="o">+</span> <span class="mh">0x50</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span><span class="n">iVar4</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">pcVar11</span> <span class="o">=</span> <span class="s">"GET"</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">iVar4</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">pcVar11</span> <span class="o">=</span> <span class="s">"POST"</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">iVar4</span> <span class="o">==</span> <span class="mi">3</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">pcVar11</span> <span class="o">=</span> <span class="s">"PUT"</span><span class="p">;</span>
+  <span class="p">}</span>
+  <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">iVar4</span> <span class="o">==</span> <span class="mi">4</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">pcVar11</span> <span class="o">=</span> <span class="s">"DELETE"</span><span class="p">;</span>
+  <span class="p">}</span>
+
+  <span class="c1">// Create HTTP request handle</span>
+  <span class="n">lVar8</span> <span class="o">=</span> <span class="n">HttpOpenRequestA</span><span class="p">(</span><span class="o">*</span><span class="p">(</span><span class="n">undefined8</span> <span class="o">*</span><span class="p">)(</span><span class="n">param_1</span> <span class="o">+</span> <span class="mh">0x28</span><span class="p">),</span> <span class="n">pcVar11</span><span class="p">,</span> <span class="n">local_1598</span> <span class="o">+</span> <span class="mi">3</span><span class="p">,</span> <span class="s">"HTTP/1.0"</span><span class="p">);</span>
+  <span class="o">*</span><span class="p">(</span><span class="n">longlong</span> <span class="o">*</span><span class="p">)(</span><span class="n">param_1</span> <span class="o">+</span> <span class="mh">0x20</span><span class="p">)</span> <span class="o">=</span> <span class="n">lVar8</span><span class="p">;</span>
+  
+  <span class="c1">// Execute HTTP Request with SSL Bypass</span>
+  <span class="n">SendHttpRequestWithSSLBypass</span><span class="p">(</span><span class="n">lVar8</span><span class="p">,</span> <span class="p">...);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h4 id="technical-analysis-1">Technical Analysis:</h4>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">ExecuteNetworkHttpRequest</code> acts as the primary HTTP client engine for the Trojanized Sciter runtime.</li>
+  <li>It parses destination host names, protocols (<code class="language-plaintext highlighter-rouge">http</code> vs <code class="language-plaintext highlighter-rouge">https</code>), target ports, and method verbs (<code class="language-plaintext highlighter-rouge">GET</code>, <code class="language-plaintext highlighter-rouge">POST</code>, <code class="language-plaintext highlighter-rouge">PUT</code>, <code class="language-plaintext highlighter-rouge">DELETE</code>).</li>
+  <li>Destination URLs are passed dynamically at runtime in memory structures (<code class="language-plaintext highlighter-rouge">param_1 + 0x18</code>) to defeat static string extraction.</li>
+</ul>
+
+<hr />
+
+<h3 id="3-screen-capture--desktop-bitmap-extraction-createdesktopscreenbitmap--extractdibitsfrombitmap">3. Screen Capture &amp; Desktop Bitmap Extraction (<code class="language-plaintext highlighter-rouge">CreateDesktopScreenBitmap</code> &amp; <code class="language-plaintext highlighter-rouge">ExtractDIBitsFromBitmap</code>)</h3>
+
+<p><strong>Address</strong>: <code class="language-plaintext highlighter-rouge">0x18007a6f0</code> &amp; <code class="language-plaintext highlighter-rouge">0x180081520</code><br />
+<strong>Ghidra Names</strong>: <code class="language-plaintext highlighter-rouge">CreateDesktopScreenBitmap</code> (Renamed from <code class="language-plaintext highlighter-rouge">FUN_18007a6f0</code>) &amp; <code class="language-plaintext highlighter-rouge">ExtractDIBitsFromBitmap</code> (Renamed from <code class="language-plaintext highlighter-rouge">FUN_180081520</code>)</p>
+
+<h4 id="decompiled-code-snippets">Decompiled Code Snippets:</h4>
+
+<h5 id="createdesktopscreenbitmap"><code class="language-plaintext highlighter-rouge">CreateDesktopScreenBitmap</code>:</h5>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">undefined8</span> <span class="o">*</span> <span class="nf">CreateDesktopScreenBitmap</span><span class="p">(</span><span class="n">undefined8</span> <span class="o">*</span><span class="n">param_1</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">param_2</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">HDC</span> <span class="n">hdc</span><span class="p">;</span>
+  <span class="n">HBITMAP</span> <span class="n">pHVar1</span><span class="p">;</span>
+  <span class="n">undefined1</span> <span class="n">local_28</span> <span class="p">[</span><span class="mi">12</span><span class="p">];</span>
+  
+  <span class="c1">// Acquire Handle to the entire Desktop Device Context (HWND = NULL)</span>
+  <span class="n">hdc</span> <span class="o">=</span> <span class="n">GetDC</span><span class="p">((</span><span class="n">HWND</span><span class="p">)</span><span class="mh">0x0</span><span class="p">);</span>
+  
+  <span class="c1">// Create an in-memory bitmap compatible with Desktop DC dimensions</span>
+  <span class="n">pHVar1</span> <span class="o">=</span> <span class="n">CreateCompatibleBitmap</span><span class="p">(</span><span class="n">hdc</span><span class="p">,</span> <span class="o">*</span><span class="n">param_2</span><span class="p">,</span> <span class="n">param_2</span><span class="p">[</span><span class="mi">1</span><span class="p">]);</span>
+  <span class="n">param_1</span><span class="p">[</span><span class="mi">9</span><span class="p">]</span> <span class="o">=</span> <span class="n">pHVar1</span><span class="p">;</span>
+  
+  <span class="c1">// Release Desktop DC handle</span>
+  <span class="n">ReleaseDC</span><span class="p">((</span><span class="n">HWND</span><span class="p">)</span><span class="mh">0x0</span><span class="p">,</span> <span class="n">hdc</span><span class="p">);</span>
+  
+  <span class="c1">// Retrieve bitmap dimensions &amp; color layout metadata</span>
+  <span class="n">GetObjectA</span><span class="p">((</span><span class="n">HANDLE</span><span class="p">)</span><span class="n">param_1</span><span class="p">[</span><span class="mi">9</span><span class="p">],</span> <span class="mh">0x20</span><span class="p">,</span> <span class="n">local_28</span><span class="p">);</span>
+  <span class="k">return</span> <span class="n">param_1</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h5 id="extractdibitsfrombitmap"><code class="language-plaintext highlighter-rouge">ExtractDIBitsFromBitmap</code>:</h5>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">longlong</span> <span class="o">*</span> <span class="nf">ExtractDIBitsFromBitmap</span><span class="p">(</span><span class="kt">int</span> <span class="o">*</span><span class="n">param_1</span><span class="p">,</span> <span class="n">uint</span> <span class="o">*</span><span class="n">param_2</span><span class="p">,</span> <span class="n">longlong</span> <span class="o">*</span><span class="n">param_3</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">HICON</span> <span class="n">hIcon</span><span class="p">;</span>
+  <span class="n">HDC</span> <span class="n">hdc</span><span class="p">;</span>
+  <span class="n">LPVOID</span> <span class="n">lpvBits</span><span class="p">;</span>
+  <span class="n">ICONINFO</span> <span class="n">local_140</span><span class="p">;</span>
+
+  <span class="c1">// Create icon structure from raw memory resource</span>
+  <span class="n">hIcon</span> <span class="o">=</span> <span class="n">CreateIconFromResourceEx</span><span class="p">((</span><span class="n">PBYTE</span><span class="p">)(...));</span>
+
+  <span class="k">if</span> <span class="p">(</span><span class="n">hIcon</span> <span class="o">!=</span> <span class="p">(</span><span class="n">HICON</span><span class="p">)</span><span class="mh">0x0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="n">GetIconInfo</span><span class="p">(</span><span class="n">hIcon</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">local_140</span><span class="p">);</span>
+
+    <span class="c1">// Allocate memory buffer for pixel bits</span>
+    <span class="n">local_148</span> <span class="o">=</span> <span class="n">operator_new</span><span class="p">(</span><span class="mh">0x150</span><span class="p">);</span>
+    <span class="n">hdc</span> <span class="o">=</span> <span class="n">GetDC</span><span class="p">((</span><span class="n">HWND</span><span class="p">)</span><span class="mh">0x0</span><span class="p">);</span>
+    <span class="n">lpvBits</span> <span class="o">=</span> <span class="p">(</span><span class="n">LPVOID</span><span class="p">)</span><span class="n">plVar4</span><span class="p">[</span><span class="mh">0x11</span><span class="p">];</span>
+
+    <span class="c1">// Extract device-independent bitmap (DIB) raw pixel bytes</span>
+    <span class="n">GetDIBits</span><span class="p">(</span><span class="n">hdc</span><span class="p">,</span> <span class="n">local_140</span><span class="p">.</span><span class="n">hbmColor</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">local_110</span><span class="p">,</span> <span class="n">lpvBits</span><span class="p">,</span> <span class="p">(</span><span class="n">LPBITMAPINFO</span><span class="p">)(</span><span class="n">plVar4</span> <span class="o">+</span> <span class="mi">10</span><span class="p">),</span> <span class="mi">0</span><span class="p">);</span>
+    <span class="n">ReleaseDC</span><span class="p">((</span><span class="n">HWND</span><span class="p">)</span><span class="mh">0x0</span><span class="p">,</span> <span class="n">hdc</span><span class="p">);</span>
+    
+    <span class="c1">// Draw mouse pointer cursor into bitmap buffer</span>
+    <span class="n">DrawIconEx</span><span class="p">(</span><span class="n">local_f0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">hIcon</span><span class="p">,</span> <span class="n">cxDesired</span><span class="p">,</span> <span class="n">cyDesired</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">HBRUSH</span><span class="p">)</span><span class="mh">0x0</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="n">plVar8</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<hr />
+
+<h3 id="4-in-memory-tiscript-execution-vs-disk-script-dropping">4. In-Memory TIScript Execution vs. Disk Script Dropping</h3>
+
+<p>A critical question in malware triage is whether the sample drops script files (<code class="language-plaintext highlighter-rouge">.vbs</code>, <code class="language-plaintext highlighter-rouge">.ps1</code>, <code class="language-plaintext highlighter-rouge">.bat</code>, <code class="language-plaintext highlighter-rouge">.cmd</code>) to disk.</p>
+
+<h4 id="investigation-results">Investigation Results:</h4>
+<ul>
+  <li><strong>No File Dropping</strong>: Static analysis and import table inspection confirm the binary does <strong>NOT drop script files to disk</strong>. There are zero calls to file creation APIs (<code class="language-plaintext highlighter-rouge">CreateFileW</code>/<code class="language-plaintext highlighter-rouge">WriteFile</code>) creating temporary script files, and zero invocations of script interpreters (<code class="language-plaintext highlighter-rouge">powershell.exe</code>, <code class="language-plaintext highlighter-rouge">wscript.exe</code>, <code class="language-plaintext highlighter-rouge">cmd.exe</code>).</li>
+  <li><strong>In-Memory TIScript Evaluation</strong>: The binary embeds the <strong>Sciter TIScript Virtual Machine</strong> (<code class="language-plaintext highlighter-rouge">SciterVmEval</code> at <code class="language-plaintext highlighter-rouge">0x180005410</code>, <code class="language-plaintext highlighter-rouge">TIScriptAPI</code> at <code class="language-plaintext highlighter-rouge">0x180004c60</code>, <code class="language-plaintext highlighter-rouge">SciterCallScriptingFunction</code> at <code class="language-plaintext highlighter-rouge">0x1803b3812</code>).</li>
+  <li>Event handlers, UI DOM callbacks, and background logic are executed <strong>purely in memory</strong> inside the TIScript bytecode interpreter. This leaves zero script file artifacts on disk for traditional forensic file recovery tools.</li>
+</ul>
+
+<hr />
+
+<h3 id="5-packer-analysis--uncompressed-executable-verification">5. Packer Analysis &amp; Uncompressed Executable Verification</h3>
+
+<ul>
+  <li><strong>No Packer Present</strong>: Entropy analysis confirms the binary is <strong>unpacked native 64-bit code</strong>.</li>
+  <li>Code section <code class="language-plaintext highlighter-rouge">.text</code> displays a normal uncompressed entropy of <strong>6.4591 / 8.0</strong> (packers typically exceed <strong>7.4+</strong>).</li>
+  <li>Section names correspond to standard MSVC PE sections (<code class="language-plaintext highlighter-rouge">.text</code>, <code class="language-plaintext highlighter-rouge">.rdata</code>, <code class="language-plaintext highlighter-rouge">.data</code>, <code class="language-plaintext highlighter-rouge">.pdata</code>, <code class="language-plaintext highlighter-rouge">.rsrc</code>, <code class="language-plaintext highlighter-rouge">.reloc</code>), and all <strong>10,523 functions</strong> decompile directly in Ghidra without needing OEP hunting or dynamic memory dumping.</li>
+</ul>
+
+<hr />
+
+<h2 id="python-extraction--automation-script">Python Extraction &amp; Automation Script</h2>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="s">"""
+Malware Analysis &amp; PE Resource Extractor Script
+Target: 34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c.exe
+"""</span>
+
+<span class="kn">import</span> <span class="nn">os</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">math</span>
+<span class="kn">import</span> <span class="nn">struct</span>
+<span class="kn">import</span> <span class="nn">hashlib</span>
+<span class="kn">import</span> <span class="nn">pefile</span>
+
+<span class="k">def</span> <span class="nf">calculate_entropy</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">data</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">0.0</span>
+    <span class="n">entropy</span> <span class="o">=</span> <span class="mf">0.0</span>
+    <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">256</span><span class="p">):</span>
+        <span class="n">p_x</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">data</span><span class="p">.</span><span class="n">count</span><span class="p">(</span><span class="nb">bytes</span><span class="p">([</span><span class="n">x</span><span class="p">])))</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">p_x</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">entropy</span> <span class="o">+=</span> <span class="o">-</span> <span class="n">p_x</span> <span class="o">*</span> <span class="n">math</span><span class="p">.</span><span class="n">log</span><span class="p">(</span><span class="n">p_x</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">entropy</span>
+
+<span class="k">def</span> <span class="nf">get_hashes</span><span class="p">(</span><span class="n">data</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s">"md5"</span><span class="p">:</span> <span class="n">hashlib</span><span class="p">.</span><span class="n">md5</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">hexdigest</span><span class="p">(),</span>
+        <span class="s">"sha1"</span><span class="p">:</span> <span class="n">hashlib</span><span class="p">.</span><span class="n">sha1</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">hexdigest</span><span class="p">(),</span>
+        <span class="s">"sha256"</span><span class="p">:</span> <span class="n">hashlib</span><span class="p">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">data</span><span class="p">).</span><span class="n">hexdigest</span><span class="p">()</span>
+    <span class="p">}</span>
+
+<span class="k">def</span> <span class="nf">analyze_malware</span><span class="p">(</span><span class="n">filepath</span><span class="p">):</span>
+    <span class="k">print</span><span class="p">(</span><span class="s">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[*] ANALYZING SAMPLE: </span><span class="si">{</span><span class="n">filepath</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="s">"="</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
+
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">filepath</span><span class="p">,</span> <span class="s">"rb"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+        <span class="n">content</span> <span class="o">=</span> <span class="n">f</span><span class="p">.</span><span class="n">read</span><span class="p">()</span>
+
+    <span class="n">hashes</span> <span class="o">=</span> <span class="n">get_hashes</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] File Size   : </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="si">}</span><span class="s"> bytes (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="o">/</span><span class="p">(</span><span class="mi">1024</span><span class="o">*</span><span class="mi">1024</span><span class="p">)</span><span class="si">:</span><span class="p">.</span><span class="mi">2</span><span class="n">f</span><span class="si">}</span><span class="s"> MB)"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] MD5         : </span><span class="si">{</span><span class="n">hashes</span><span class="p">[</span><span class="s">'md5'</span><span class="p">]</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] SHA1        : </span><span class="si">{</span><span class="n">hashes</span><span class="p">[</span><span class="s">'sha1'</span><span class="p">]</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] SHA256      : </span><span class="si">{</span><span class="n">hashes</span><span class="p">[</span><span class="s">'sha256'</span><span class="p">]</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] Entropy     : </span><span class="si">{</span><span class="n">calculate_entropy</span><span class="p">(</span><span class="n">content</span><span class="p">)</span><span class="si">:</span><span class="p">.</span><span class="mi">4</span><span class="n">f</span><span class="si">}</span><span class="s"> / 8.0"</span><span class="p">)</span>
+
+    <span class="n">pe</span> <span class="o">=</span> <span class="n">pefile</span><span class="p">.</span><span class="n">PE</span><span class="p">(</span><span class="n">filepath</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] Architecture: </span><span class="si">{</span><span class="s">'x64'</span> <span class="k">if</span> <span class="n">pe</span><span class="p">.</span><span class="n">FILE_HEADER</span><span class="p">.</span><span class="n">Machine</span> <span class="o">==</span> <span class="mh">0x8664</span> <span class="k">else</span> <span class="s">'x86'</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"[+] PE Sections : </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">pe</span><span class="p">.</span><span class="n">sections</span><span class="p">)</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+
+    <span class="k">print</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">[+] SECTION DETAILS:"</span><span class="p">)</span>
+    <span class="k">print</span><span class="p">(</span><span class="s">"-"</span> <span class="o">*</span> <span class="mi">70</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="n">pe</span><span class="p">.</span><span class="n">sections</span><span class="p">:</span>
+        <span class="n">name</span> <span class="o">=</span> <span class="n">sec</span><span class="p">.</span><span class="n">Name</span><span class="p">.</span><span class="n">rstrip</span><span class="p">(</span><span class="sa">b</span><span class="s">"</span><span class="se">\x00</span><span class="s">"</span><span class="p">).</span><span class="n">decode</span><span class="p">(</span><span class="s">"ascii"</span><span class="p">,</span> <span class="n">errors</span><span class="o">=</span><span class="s">"ignore"</span><span class="p">)</span>
+        <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="o">&lt;</span><span class="mi">10</span><span class="si">}</span><span class="s"> RawPtr: 0x</span><span class="si">{</span><span class="n">sec</span><span class="p">.</span><span class="n">PointerToRawData</span><span class="si">:</span><span class="mi">08</span><span class="n">X</span><span class="si">}</span><span class="s"> RawSize: 0x</span><span class="si">{</span><span class="n">sec</span><span class="p">.</span><span class="n">SizeOfRawData</span><span class="si">:</span><span class="mi">08</span><span class="n">X</span><span class="si">}</span><span class="s"> Entropy: </span><span class="si">{</span><span class="n">sec</span><span class="p">.</span><span class="n">get_entropy</span><span class="p">()</span><span class="si">:</span><span class="p">.</span><span class="mi">4</span><span class="n">f</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+
+    <span class="c1"># Overlay Analysis
+</span>    <span class="n">last_end</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">sec</span><span class="p">.</span><span class="n">PointerToRawData</span> <span class="o">+</span> <span class="n">sec</span><span class="p">.</span><span class="n">SizeOfRawData</span> <span class="k">for</span> <span class="n">sec</span> <span class="ow">in</span> <span class="n">pe</span><span class="p">.</span><span class="n">sections</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">content</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">last_end</span><span class="p">:</span>
+        <span class="n">overlay</span> <span class="o">=</span> <span class="n">content</span><span class="p">[</span><span class="n">last_end</span><span class="p">:]</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"</span><span class="se">\n</span><span class="s">[!] OVERLAY DETECTED!"</span><span class="p">)</span>
+        <span class="k">print</span><span class="p">(</span><span class="sa">f</span><span class="s">"    Offset : 0x</span><span class="si">{</span><span class="n">last_end</span><span class="si">:</span><span class="n">X</span><span class="si">}</span><span class="s"> | Size: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">overlay</span><span class="p">)</span><span class="si">}</span><span class="s"> bytes | Entropy: </span><span class="si">{</span><span class="n">calculate_entropy</span><span class="p">(</span><span class="n">overlay</span><span class="p">)</span><span class="si">:</span><span class="p">.</span><span class="mi">4</span><span class="n">f</span><span class="si">}</span><span class="s">"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">overlay</span><span class="p">.</span><span class="n">startswith</span><span class="p">(</span><span class="sa">b</span><span class="s">"</span><span class="se">\x30\x82</span><span class="s">"</span><span class="p">):</span>
+            <span class="k">print</span><span class="p">(</span><span class="s">"    Type   : Authenticode PKCS#7 Digital Signature Directory"</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="n">__name__</span> <span class="o">==</span> <span class="s">"__main__"</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">analyze_malware</span><span class="p">(</span><span class="n">sys</span><span class="p">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">print</span><span class="p">(</span><span class="s">"Usage: python malware_extractor.py &lt;path_to_exe&gt;"</span><span class="p">)</span>
+</code></pre></div></div>
+
+<hr />
+
+<h2 id="complete-indicators-of-compromise-iocs">Complete Indicators of Compromise (IOCs)</h2>
+
+<h3 id="1-file-hashes">1. File Hashes</h3>
+<ul>
+  <li><strong>MD5</strong>: <code class="language-plaintext highlighter-rouge">ffcca2a80c1ccc7207d3a8e0fc48104e</code></li>
+  <li><strong>SHA1</strong>: <code class="language-plaintext highlighter-rouge">bf9ed1540471faf4bea966462ef08a5c1cc50e8b</code></li>
+  <li><strong>SHA256</strong>: <code class="language-plaintext highlighter-rouge">34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c</code></li>
+</ul>
+
+<h3 id="2-network--user-agent-indicators">2. Network &amp; User-Agent Indicators</h3>
+<ul>
+  <li><strong>User-Agent String</strong>: <code class="language-plaintext highlighter-rouge">sciter 1.0; %s; www.terrainformatica.com )</code></li>
+  <li><strong>Protocol</strong>: <code class="language-plaintext highlighter-rouge">HTTP/1.0</code> / <code class="language-plaintext highlighter-rouge">HTTPS</code></li>
+  <li><strong>SSL Bypass Flag</strong>: <code class="language-plaintext highlighter-rouge">0x00000100</code> (<code class="language-plaintext highlighter-rouge">SECURITY_FLAG_IGNORE_UNKNOWN_CA</code>)</li>
+</ul>
+
+<h3 id="3-file-system--resource-artifacts">3. File System &amp; Resource Artifacts</h3>
+<ul>
+  <li><strong>GUI Framework</strong>: <code class="language-plaintext highlighter-rouge">sciter-x.dll</code> (Embedded HTML/CSS UI engine)</li>
+  <li><strong>Sciter Resource Schemas</strong>: <code class="language-plaintext highlighter-rouge">sciter://</code>, <code class="language-plaintext highlighter-rouge">sciter:</code>, <code class="language-plaintext highlighter-rouge">master.css</code></li>
+  <li><strong>Overlay Certificate</strong>: PKCS#7 Authenticode Signature Table (<code class="language-plaintext highlighter-rouge">0x3082...</code>)</li>
+</ul>
+
+<hr />
+
+<h2 id="yara-detection-rule">YARA Detection Rule</h2>
+
+<pre><code class="language-yara">rule Win64_Trojan_Sciter_Spyware {
+    meta:
+        description = "Detects Trojanized Sciter binary with SSL Bypass &amp; Screen Capture capabilities"
+        author = "Threat Research Team"
+        date = "2026-08-02"
+        hash1 = "34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c"
+        severity = "Critical"
+
+    strings:
+        // Sciter Engine Artifacts
+        $sciter1 = "sciter-x.dll" ascii wide
+        $sciter2 = "sciter 1.0; %s; www.terrainformatica.com" ascii wide
+        $sciter3 = "SCITER-DIALOG-W" ascii wide
+
+        // High-Risk API Imports
+        $api1 = "HttpSendRequestA" ascii
+        $api2 = "CreateCompatibleBitmap" ascii
+        $api3 = "GetDIBits" ascii
+        $api4 = "IsDebuggerPresent" ascii
+
+        // SSL Bypass Security Option Logic (0x100 = SECURITY_FLAG_IGNORE_UNKNOWN_CA)
+        $ssl_bypass = { 81 ?? ?? ?? 00 01 00 00 }
+
+    condition:
+        uint16(0) == 0x5A4D and
+        filesize &lt; 10MB and
+        all of ($sciter*) and
+        3 of ($api*) and
+        $ssl_bypass
+}
+</code></pre>
+
+<h3 id="threat-intelligence--external-sandbox-references">Threat Intelligence &amp; External Sandbox References</h3>
+<ul>
+  <li><a href="https://hybrid-analysis.com/yara-search/results/92b5677b412951dd312dbab531877d31f2bba4e8ee8c57562ec177d4f58cb94a?">Free Automated Malware Analysis Service - powered by Falcon Sandbox - Search results from HA Community Files</a></li>
+</ul>
+
+<hr />
+
+<h2 id="conclusion--recommendations">Conclusion &amp; Recommendations</h2>
+
+<p>The sample <code class="language-plaintext highlighter-rouge">34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c.exe</code> is a sophisticated spyware Trojan masquerading as a Sciter HTML/CSS application. It combines desktop screen capture, host fingerprinting, in-memory TIScript execution, SSL certificate validation overrides, and anti-debugging techniques to maintain stealthy command-and-control communications.</p>
+
+  </div>
+</article>
+
+    </main>
+
+    <footer class="rpg-footer">
+      <p>&copy; 2026 MyPortfolio. Built with Jekyll (PaperMod layout).</p>
+    </footer>
+  </div>
+
+  <script>
+    // Theme toggle button logic
+    const themeBtn = document.getElementById('theme-toggle');
+    const sunIcon = document.getElementById('sun');
+    const moonIcon = document.getElementById('moon');
+
+    function updateIcons() {
+      if (document.body.classList.contains('dark')) {
+        sunIcon.style.display = 'block';
+        moonIcon.style.display = 'none';
+      } else {
+        sunIcon.style.display = 'none';
+        moonIcon.style.display = 'block';
+      }
+    }
+
+    // Set initial icon states
+    updateIcons();
+
+    themeBtn.addEventListener('click', () => {
+      if (document.body.classList.contains('dark')) {
+        document.body.classList.remove('dark');
+        document.body.classList.add('light');
+        localStorage.setItem('theme', 'light');
+      } else {
+        document.body.classList.remove('light');
+        document.body.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+      }
+      updateIcons();
+    });
+  </script>
+</body>
+</html>
