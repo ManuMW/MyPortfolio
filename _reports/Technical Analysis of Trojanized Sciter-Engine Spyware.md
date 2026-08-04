@@ -3,7 +3,7 @@ title: "Technical Analysis of Trojanized Sciter-Engine Spyware"
 ---
 
 **Published**: August 2, 2026  
-**Author**: Antigravity Threat Research & Malware Analysis Team  
+**Author**: Manohar Venkat Gonohal  
 **Tooling**: Ghidra 11+ via Ghidra MCP, Python 3.14, `pefile`, `yara-python`
 
 ---
@@ -381,7 +381,7 @@ if __name__ == "__main__":
 rule Win64_Trojan_Sciter_Spyware {
     meta:
         description = "Detects Trojanized Sciter binary with SSL Bypass & Screen Capture capabilities"
-        author = "Threat Research Team"
+        author = "Manohar Venkat Gonohal"
         date = "2026-08-02"
         hash1 = "34ef24a700926ba1de3366a617dae590fa087fb7a37942bb8ffe51fbe468872c"
         severity = "Critical"
